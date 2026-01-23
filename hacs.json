@@ -1,0 +1,7 @@
+{
+  "name": "Liquipedia Integration",
+  "content_in_root": false,
+  "filename": "liquipedia",
+  "country": [],
+  "homeassistant": "2026.1.0"
+}
