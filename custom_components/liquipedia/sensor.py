@@ -15,6 +15,7 @@ from homeassistant.helpers.update_coordinator import (
     UpdateFailed,
 )
 from homeassistant.util import dt as dt_util
+from .api import LiquipediaAPI
 
 from .const import (
     DOMAIN,
@@ -50,7 +51,7 @@ class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator):
         """Initialize the coordinator."""
         self.game = config_entry.data[CONF_GAME]
         self.tournament = config_entry.data.get(CONF_TOURNAMENT, "")
-        
+
         super().__init__(
             hass,
             _LOGGER,
@@ -61,31 +62,17 @@ class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> dict[str, Any]:
         """Fetch data from Liquipedia."""
         try:
-            # TODO: Implement actual API calls to Liquipedia
-            # For now, return mock data
-            return {
-                "tournament_info": {
-                    "name": "World Championship 2024",
-                    "status": "Ongoing",
-                    "prize_pool": "$2,000,000",
-                    "start_date": "2024-10-01",
-                    "end_date": "2024-11-01",
-                },
-                "upcoming_matches": [
-                    {
-                        "team1": "Team A",
-                        "team2": "Team B",
-                        "time": "2024-01-24T18:00:00Z",
-                        "format": "Bo3",
-                    },
-                    {
-                        "team1": "Team C", 
-                        "team2": "Team D",
-                        "time": "2024-01-24T20:00:00Z",
-                        "format": "Bo5",
-                    },
-                ],
-            }
+            async with LiquipediaAPI(self.game) as api:
+                # Get tournament information
+                tournament_info = await api.get_tournament_info(self.tournament)
+
+                # Get upcoming matches
+                upcoming_matches = await api.get_upcoming_matches(self.tournament)
+
+                return {
+                    "tournament_info": tournament_info,
+                    "upcoming_matches": upcoming_matches,
+                }
         except Exception as exception:
             raise UpdateFailed(f"Error communicating with API: {exception}")
 
@@ -110,7 +97,6 @@ class LiquipediaSensor(CoordinatorEntity, SensorEntity):
             "model": self._game.title(),
         }
 
-
 class LiquipediaTournamentSensor(LiquipediaSensor):
     """Sensor for tournament information."""
 
@@ -125,7 +111,7 @@ class LiquipediaTournamentSensor(LiquipediaSensor):
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
-        
+
         tournament_info = self.coordinator.data.get("tournament_info", {})
         return tournament_info.get("name", "Unknown")
 
@@ -134,7 +120,7 @@ class LiquipediaTournamentSensor(LiquipediaSensor):
         """Return the state attributes."""
         if not self.coordinator.data:
             return None
-        
+
         tournament_info = self.coordinator.data.get("tournament_info", {})
         return {
             "status": tournament_info.get("status"),
@@ -159,7 +145,7 @@ class LiquipediaUpcomingMatchesSensor(LiquipediaSensor):
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
-        
+
         matches = self.coordinator.data.get("upcoming_matches", [])
         return len(matches)
 
@@ -168,7 +154,7 @@ class LiquipediaUpcomingMatchesSensor(LiquipediaSensor):
         """Return the state attributes."""
         if not self.coordinator.data:
             return None
-        
+
         matches = self.coordinator.data.get("upcoming_matches", [])
         return {
             "matches": matches,

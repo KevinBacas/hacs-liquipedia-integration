@@ -9,6 +9,16 @@ A Home Assistant custom integration that provides access to Liquipedia data for 
 - Match results and schedules
 - Support for multiple esports games
 
+## 🧪 Testing Your Sensors
+
+Want to see what data your sensors are returning? Run this command:
+
+```bash
+python3 tests/standalone_sensor_test.py
+```
+
+This will show you exactly what tournament info and match data is being fetched, without requiring Home Assistant to be running. See [tests/README.md](tests/README.md) for complete testing documentation.
+
 ## Installation
 
 ### Via HACS (Recommended)
