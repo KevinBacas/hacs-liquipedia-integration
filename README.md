@@ -1,13 +1,13 @@
 # HACS Liquipedia Integration
 
-A Home Assistant custom integration that provides access to Liquipedia data for esports tournaments, teams, and players.
+A Home Assistant custom integration that exposes the next upcoming esports match
+from Liquipedia.
 
 ## Features
 
-- Access to tournament data from Liquipedia
-- Player and team information
-- Match results and schedules
-- Support for multiple esports games
+- Select a game and a Liquipedia Match Schedule page during setup
+- Create one timestamp sensor for the next scheduled match
+- Expose the match title, both team names, tournament, and format as attributes
 
 ## Installation
 
@@ -37,11 +37,19 @@ A Home Assistant custom integration that provides access to Liquipedia data for 
 
 ## Usage
 
-Once configured, the integration will provide sensors with:
-- Tournament information
-- Player statistics
-- Team rankings
-- Match schedules
+Once configured, the integration provides a timestamp sensor. Its state is the
+scheduled start time of the next match. Attributes include `title`, `team1`,
+`team2`, `tournament`, and `best_of`.
+
+Enter the title of the tournament's Match Schedule page, exactly as it appears
+after the game name in its Liquipedia URL. For example, this URL:
+`https://liquipedia.net/leagueoflegends/First_Stand_Tournament/2026/Match_Schedule`
+uses the page title `First Stand Tournament/2026/Match Schedule`. Choose a page
+that has a Match Schedule table and contains future matches.
+
+The integration uses Liquipedia's supported MediaWiki API and polls no more
+than once every five minutes. If no future match is available, the sensor has
+no state until one appears.
 
 ## Supported Games
 
@@ -49,7 +57,10 @@ Once configured, the integration will provide sensors with:
 - Counter-Strike
 - Dota 2
 - Valorant
-- And more...
+- Overwatch
+- Hearthstone
+- StarCraft
+- StarCraft II
 
 ## Contributing
 

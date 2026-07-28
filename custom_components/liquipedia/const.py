@@ -27,4 +27,7 @@ LIQUIPEDIA_BASE_URL = "https://liquipedia.net"
 LIQUIPEDIA_API_URL = "https://liquipedia.net/{game}/api.php"
 
 # Headers
-USER_AGENT = "HomeAssistant-Liquipedia/1.0 (https://github.com/your-username/hacs-liquipedia-integration)"
+USER_AGENT = (
+    "HomeAssistant-Liquipedia/0.2 "
+    "(https://github.com/KevinBacas/hacs-liquipedia-integration)"
+)

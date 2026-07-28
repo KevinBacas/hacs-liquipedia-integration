@@ -1,0 +1,21 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Liquipedia",
+        "description": "Choose the game and enter the Match Schedule page title from Liquipedia, for example: First Stand Tournament/2026/Match Schedule.",
+        "data": {
+          "name": "Name",
+          "game": "Game",
+          "tournament": "Match Schedule page"
+        }
+      }
+    },
+    "error": {
+      "invalid_game": "Select a supported game."
+    },
+    "abort": {
+      "already_configured": "This game and tournament are already configured."
+    }
+  }
+}

@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+import aiohttp
+from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -16,11 +18,13 @@ from homeassistant.helpers.update_coordinator import (
 )
 from homeassistant.util import dt as dt_util
 
+from .api import LiquipediaAPI
 from .const import (
-    DOMAIN,
     CONF_GAME,
     CONF_TOURNAMENT,
+    DOMAIN,
     DEFAULT_UPDATE_INTERVAL,
+    USER_AGENT,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,22 +39,24 @@ async def async_setup_entry(
     coordinator = LiquipediaDataUpdateCoordinator(hass, config_entry)
     await coordinator.async_config_entry_first_refresh()
 
-    entities = [
-        LiquipediaTournamentSensor(coordinator, config_entry),
-        LiquipediaUpcomingMatchesSensor(coordinator, config_entry),
-    ]
-
-    async_add_entities(entities, True)
+    async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)], True)
 
 
-class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator):
+class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
     """Class to manage fetching data from Liquipedia."""
 
     def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
         """Initialize the coordinator."""
         self.game = config_entry.data[CONF_GAME]
-        self.tournament = config_entry.data.get(CONF_TOURNAMENT, "")
-        
+        self.tournament = config_entry.data[CONF_TOURNAMENT]
+        self.api = LiquipediaAPI(
+            self.game,
+            async_create_clientsession(
+                hass,
+                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
+            ),
+        )
+
         super().__init__(
             hass,
             _LOGGER,
@@ -58,36 +64,12 @@ class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=DEFAULT_UPDATE_INTERVAL),
         )
 
-    async def _async_update_data(self) -> dict[str, Any]:
+    async def _async_update_data(self) -> list[dict[str, Any]]:
         """Fetch data from Liquipedia."""
         try:
-            # TODO: Implement actual API calls to Liquipedia
-            # For now, return mock data
-            return {
-                "tournament_info": {
-                    "name": "World Championship 2024",
-                    "status": "Ongoing",
-                    "prize_pool": "$2,000,000",
-                    "start_date": "2024-10-01",
-                    "end_date": "2024-11-01",
-                },
-                "upcoming_matches": [
-                    {
-                        "team1": "Team A",
-                        "team2": "Team B",
-                        "time": "2024-01-24T18:00:00Z",
-                        "format": "Bo3",
-                    },
-                    {
-                        "team1": "Team C", 
-                        "team2": "Team D",
-                        "time": "2024-01-24T20:00:00Z",
-                        "format": "Bo5",
-                    },
-                ],
-            }
-        except Exception as exception:
-            raise UpdateFailed(f"Error communicating with API: {exception}")
+            return await self.api.get_upcoming_matches(self.tournament)
+        except (aiohttp.ClientError, ValueError) as exception:
+            raise UpdateFailed(f"Error communicating with API: {exception}") from exception
 
 
 class LiquipediaSensor(CoordinatorEntity, SensorEntity):
@@ -111,66 +93,34 @@ class LiquipediaSensor(CoordinatorEntity, SensorEntity):
         }
 
 
-class LiquipediaTournamentSensor(LiquipediaSensor):
-    """Sensor for tournament information."""
+class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
+    """Sensor showing the next upcoming match."""
 
     def __init__(self, coordinator: LiquipediaDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator, config_entry)
-        self._attr_name = f"{self._game.title()} Tournament Info"
-        self._attr_unique_id = f"{config_entry.entry_id}_tournament"
+        self._attr_name = f"{self._game.title()} Upcoming Match"
+        self._attr_unique_id = f"{config_entry.entry_id}_upcoming_match"
+        self._attr_device_class = SensorDeviceClass.TIMESTAMP
 
     @property
-    def native_value(self) -> str | None:
+    def native_value(self) -> datetime | None:
         """Return the state of the sensor."""
         if not self.coordinator.data:
             return None
-        
-        tournament_info = self.coordinator.data.get("tournament_info", {})
-        return tournament_info.get("name", "Unknown")
+        return self.coordinator.data[0]["date"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the state attributes."""
         if not self.coordinator.data:
             return None
-        
-        tournament_info = self.coordinator.data.get("tournament_info", {})
+        match = self.coordinator.data[0]
         return {
-            "status": tournament_info.get("status"),
-            "prize_pool": tournament_info.get("prize_pool"),
-            "start_date": tournament_info.get("start_date"),
-            "end_date": tournament_info.get("end_date"),
-            "last_updated": dt_util.utcnow().isoformat(),
-        }
-
-
-class LiquipediaUpcomingMatchesSensor(LiquipediaSensor):
-    """Sensor for upcoming matches."""
-
-    def __init__(self, coordinator: LiquipediaDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator, config_entry)
-        self._attr_name = f"{self._game.title()} Upcoming Matches"
-        self._attr_unique_id = f"{config_entry.entry_id}_matches"
-
-    @property
-    def native_value(self) -> int | None:
-        """Return the state of the sensor."""
-        if not self.coordinator.data:
-            return None
-        
-        matches = self.coordinator.data.get("upcoming_matches", [])
-        return len(matches)
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any] | None:
-        """Return the state attributes."""
-        if not self.coordinator.data:
-            return None
-        
-        matches = self.coordinator.data.get("upcoming_matches", [])
-        return {
-            "matches": matches,
+            "title": match["title"],
+            "team1": match["team1"],
+            "team2": match["team2"],
+            "tournament": match.get("tournament") or self._tournament,
+            "best_of": match.get("best_of"),
             "last_updated": dt_util.utcnow().isoformat(),
         }
