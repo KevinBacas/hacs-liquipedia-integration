@@ -1,16 +1,16 @@
 {
   "domain": "liquipedia",
   "name": "Liquipedia Integration",
-  "codeowners": ["@your-github-username"],
+  "codeowners": ["@KevinBacas"],
   "config_flow": true,
   "dependencies": [],
-  "documentation": "https://github.com/your-github-username/hacs-liquipedia-integration",
+  "documentation": "https://github.com/KevinBacas/hacs-liquipedia-integration",
   "homekit": {},
   "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/your-github-username/hacs-liquipedia-integration/issues",
+  "issue_tracker": "https://github.com/KevinBacas/hacs-liquipedia-integration/issues",
   "loggers": ["custom_components.liquipedia"],
-  "requirements": ["aiohttp>=3.8.0", "beautifulsoup4>=4.11.0"],
+  "requirements": [],
   "ssdp": {},
-  "version": "0.1.0",
+  "version": "0.2.0",
   "zeroconf": {}
 }
