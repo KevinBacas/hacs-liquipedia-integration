@@ -1,0 +1,141 @@
+name: CI & Release Candidate
+
+# Triggered on every PR update and when labels are added/removed.
+# Two jobs:
+#   1. validate  – always runs: hassfest + HACS validation.
+#   2. release-candidate – runs only when a bump label is present on the PR
+#      (bump:patch, bump:minor, or bump:major) and validate passes.
+#      It bumps the version in manifest.json on a detached commit, force-pushes
+#      an RC tag (e.g. v0.3.0-rc.42), then creates/updates a GitHub pre-release.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+    branches: [main]
+
+# Default: restrict GITHUB_TOKEN to read-only; the release-candidate job
+# overrides this with contents: write where it needs to push tags.
+permissions:
+  contents: read
+
+# Cancel in-progress runs for the same PR when new commits or label changes arrive.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Validate the integration with hassfest and HACS tooling.
+  # ---------------------------------------------------------------------------
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@master
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Create / update a release candidate pre-release.
+  # Only runs when one of the bump labels is present on the PR.
+  #   bump:patch  →  patch increment  (0.2.0 → 0.2.1)
+  #   bump:minor  →  minor increment  (0.2.0 → 0.3.0)
+  #   bump:major  →  major increment  (0.2.0 → 1.0.0)
+  # ---------------------------------------------------------------------------
+  release-candidate:
+    name: Release Candidate
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: |
+      contains(github.event.pull_request.labels.*.name, 'bump:major') ||
+      contains(github.event.pull_request.labels.*.name, 'bump:minor') ||
+      contains(github.event.pull_request.labels.*.name, 'bump:patch')
+    steps:
+      - name: Checkout PR head (detached)
+        uses: actions/checkout@v4
+        with:
+          # Check out the exact PR HEAD SHA so that any commit we create stays
+          # detached (it won't be pushed to the PR branch, only the tag will).
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      # Determine which bump type takes precedence (major > minor > patch).
+      - name: Determine bump type
+        id: bump
+        run: |
+          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:major') }}" == "true" ]]; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:minor') }}" == "true" ]]; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Read current version from manifest.json and compute the next one.
+      - name: Compute next version
+        id: version
+        run: |
+          current=$(jq -r '.version' custom_components/liquipedia/manifest.json)
+          # Strip any pre-release suffix (e.g. 0.2.0-rc.1 → 0.2.0)
+          base="${current%%-*}"
+          IFS='.' read -r major minor patch <<< "$base"
+          case "${{ steps.bump.outputs.type }}" in
+            major) new="$((major + 1)).0.0" ;;
+            minor) new="${major}.$((minor + 1)).0" ;;
+            *)     new="${major}.${minor}.$((patch + 1))" ;;
+          esac
+          pr="${{ github.event.pull_request.number }}"
+          echo "version=${new}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${new}-rc.${pr}" >> "$GITHUB_OUTPUT"
+
+      # Bump the version in manifest.json, commit on the detached HEAD, then
+      # force-push only the tag (the PR branch is NOT modified).
+      - name: Bump manifest.json and create RC tag
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          tag="${{ steps.version.outputs.tag }}"
+
+          jq --arg v "$version" '.version = $v' \
+            custom_components/liquipedia/manifest.json > /tmp/manifest.json
+          mv /tmp/manifest.json custom_components/liquipedia/manifest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add custom_components/liquipedia/manifest.json
+
+          # Only commit if manifest actually changed (avoids empty commits).
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: bump version to ${version}"
+          fi
+
+          git tag -f "$tag"
+          git push origin "$tag" --force
+
+      # Create or replace the GitHub pre-release that points to the RC tag.
+      - name: Create or update GitHub pre-release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ steps.version.outputs.tag }}"
+          version="${{ steps.version.outputs.version }}"
+          pr="${{ github.event.pull_request.number }}"
+          title="${{ github.event.pull_request.title }}"
+
+          # Delete the existing pre-release for this tag if it already exists,
+          # so we always have a fresh one pointing to the latest commit.
+          gh release delete "$tag" --yes 2>/dev/null || true
+
+          gh release create "$tag" \
+            --title "v${version} – Release Candidate (PR #${pr})" \
+            --notes "$(printf '## Release Candidate for v%s\n\nPR #%s: %s\n\nThis pre-release was created automatically by CI.\nIt will be promoted to a stable release once the PR is merged.' \
+              "$version" "$pr" "$title")" \
+            --prerelease
