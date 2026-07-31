@@ -10,6 +10,7 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_create_clientsession
+from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
@@ -83,14 +84,14 @@ class LiquipediaSensor(CoordinatorEntity, SensorEntity):
         self._tournament = config_entry.data.get(CONF_TOURNAMENT, "")
 
     @property
-    def device_info(self) -> dict[str, Any]:
+    def device_info(self) -> DeviceInfo:
         """Return device information about this entity."""
-        return {
-            "identifiers": {(DOMAIN, self._config_entry.entry_id)},
-            "name": f"Liquipedia {self._game.title()}",
-            "manufacturer": "Liquipedia",
-            "model": self._game.title(),
-        }
+        return DeviceInfo(
+            identifiers={(DOMAIN, self._config_entry.entry_id)},
+            name=f"Liquipedia {self._game.title()}",
+            manufacturer="Liquipedia",
+            model=self._game.title(),
+        )
 
 
 class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
