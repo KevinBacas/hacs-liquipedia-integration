@@ -41,6 +41,10 @@ jobs:
         uses: hacs/action@main
         with:
           category: integration
+          # topics and description are GitHub repository settings that must be
+          # configured manually in the repo settings page; they cannot be set
+          # via a code commit, so we skip those two checks here.
+          ignore: "topics description"
 
   # ---------------------------------------------------------------------------
   # Job 2: Create / update a release candidate pre-release.
