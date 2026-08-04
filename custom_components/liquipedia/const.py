@@ -9,6 +9,7 @@ CONF_TOURNAMENT = "tournament"
 # Defaults
 DEFAULT_GAME = "leagueoflegends"
 DEFAULT_UPDATE_INTERVAL = 300  # 5 minutes
+MATCH_RUNNING_WINDOW = 4 * 60 * 60  # Matches are considered active for up to four hours.
 
 # Supported games
 SUPPORTED_GAMES = [

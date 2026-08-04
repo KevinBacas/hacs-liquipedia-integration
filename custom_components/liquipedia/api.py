@@ -111,6 +111,12 @@ class LiquipediaAPI:
 
     async def get_upcoming_matches(self, page_title: str) -> list[dict[str, Any]]:
         """Return future matches from a tournament match-schedule page."""
+        matches = await self.get_matches(page_title)
+        now = datetime.now(timezone.utc)
+        return [match for match in matches if match["date"] >= now]
+
+    async def get_matches(self, page_title: str) -> list[dict[str, Any]]:
+        """Return matches from a tournament match-schedule page."""
         session = self._session
         if session is None:
             session = aiohttp.ClientSession(
@@ -140,9 +146,8 @@ class LiquipediaAPI:
 
         parser = _MatchScheduleParser()
         parser.feed(page_html)
-        now = datetime.now(timezone.utc)
         return sorted(
-            (match for match in parser.matches if match["date"] >= now),
+            parser.matches,
             key=lambda match: match["date"],
         )
 

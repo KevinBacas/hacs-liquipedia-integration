@@ -37,9 +37,7 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Liquipedia sensor platform."""
-    coordinator = LiquipediaDataUpdateCoordinator(hass, config_entry)
-    await coordinator.async_config_entry_first_refresh()
-
+    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)], True)
 
 
@@ -68,7 +66,7 @@ class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]
     async def _async_update_data(self) -> list[dict[str, Any]]:
         """Fetch data from Liquipedia."""
         try:
-            return await self.api.get_upcoming_matches(self.tournament)
+            return await self.api.get_matches(self.tournament)
         except (aiohttp.ClientError, ValueError) as exception:
             raise UpdateFailed(f"Error communicating with API: {exception}") from exception
 
@@ -107,16 +105,17 @@ class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
     @property
     def native_value(self) -> datetime | None:
         """Return the state of the sensor."""
-        if not self.coordinator.data:
+        match = self._upcoming_match
+        if match is None:
             return None
-        return self.coordinator.data[0]["date"]
+        return match["date"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the state attributes."""
-        if not self.coordinator.data:
+        match = self._upcoming_match
+        if match is None:
             return None
-        match = self.coordinator.data[0]
         return {
             "title": match["title"],
             "team1": match["team1"],
@@ -125,3 +124,12 @@ class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
             "best_of": match.get("best_of"),
             "last_updated": dt_util.utcnow().isoformat(),
         }
+
+    @property
+    def _upcoming_match(self) -> dict[str, Any] | None:
+        """Return the next match that has not started."""
+        now = dt_util.utcnow()
+        return next(
+            (match for match in self.coordinator.data if match["date"] >= now),
+            None,
+        )
