@@ -7,7 +7,7 @@ from Liquipedia.
 
 - Select a game and a Liquipedia Match Schedule page during setup
 - Create one timestamp sensor for the next scheduled match
-- Create a match-running binary sensor that is unavailable outside an active match
+- Create a match-running binary sensor when Liquipedia explicitly marks a match live
 - Expose the match title, both team names, tournament, and format as attributes
 
 ## Installation
@@ -40,8 +40,8 @@ from Liquipedia.
 
 Once configured, the integration provides a timestamp sensor whose state is the
 scheduled start time of the next match. It also provides a match-running binary
-sensor. That entity is unavailable when no match is running and becomes
-available/on when a scheduled match starts. Match details are exposed as
+sensor. That entity is on only when Liquipedia explicitly identifies a match as
+live; it is off when no live match is reported. Match details are exposed as
 attributes including `title`, `team1`, `team2`, `tournament`, and `best_of`.
 
 Enter the title of the tournament's Match Schedule page, exactly as it appears

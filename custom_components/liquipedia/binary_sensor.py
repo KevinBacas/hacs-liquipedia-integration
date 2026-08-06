@@ -12,9 +12,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
 
-from .const import CONF_GAME, DOMAIN, MATCH_RUNNING_WINDOW
+from .const import CONF_GAME, DOMAIN
 from .sensor import LiquipediaDataUpdateCoordinator
 
 
@@ -34,7 +33,7 @@ async def async_setup_entry(
 class LiquipediaMatchRunningBinarySensor(
     CoordinatorEntity[LiquipediaDataUpdateCoordinator], BinarySensorEntity
 ):
-    """Binary sensor available while a match is running."""
+    """Binary sensor reporting an explicitly live Liquipedia match."""
 
     def __init__(
         self,
@@ -61,18 +60,11 @@ class LiquipediaMatchRunningBinarySensor(
 
     @property
     def _current_match(self) -> dict[str, Any] | None:
-        """Return the match currently within its running window."""
-        current_time = dt_util.utcnow()
+        """Return the match Liquipedia explicitly marks as live."""
         for match in reversed(self.coordinator.data):
-            start = match["date"].timestamp()
-            if start <= current_time.timestamp() <= start + MATCH_RUNNING_WINDOW:
+            if match.get("status") == "live":
                 return match
         return None
-
-    @property
-    def available(self) -> bool:
-        """Return whether a match is currently running."""
-        return super().available and self._current_match is not None
 
     @property
     def is_on(self) -> bool:
