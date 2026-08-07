@@ -68,13 +68,21 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      # Determine which bump type takes precedence (major > minor > patch).
+      # Require an unambiguous release decision.
       - name: Determine bump type
         id: bump
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
-          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:major') }}" == "true" ]]; then
+          bump_count=$(jq '[.[] | select(. == "bump:major" or . == "bump:minor" or . == "bump:patch")] | length' <<< "$LABELS")
+          if [ "$bump_count" -ne 1 ]; then
+            echo "Exactly one bump label is required." >&2
+            exit 1
+          fi
+
+          if jq -e 'index("bump:major")' <<< "$LABELS" > /dev/null; then
             echo "type=major" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:minor') }}" == "true" ]]; then
+          elif jq -e 'index("bump:minor")' <<< "$LABELS" > /dev/null; then
             echo "type=minor" >> "$GITHUB_OUTPUT"
           else
             echo "type=patch" >> "$GITHUB_OUTPUT"
