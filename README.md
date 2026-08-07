@@ -7,6 +7,7 @@ from Liquipedia.
 
 - Select a game and a Liquipedia Match Schedule page during setup
 - Create one timestamp sensor for the next scheduled match
+- Create a match-running binary sensor when Liquipedia explicitly marks a match live
 - Expose the match title, both team names, tournament, and format as attributes
 
 ## Installation
@@ -37,9 +38,11 @@ from Liquipedia.
 
 ## Usage
 
-Once configured, the integration provides a timestamp sensor. Its state is the
-scheduled start time of the next match. Attributes include `title`, `team1`,
-`team2`, `tournament`, and `best_of`.
+Once configured, the integration provides a timestamp sensor whose state is the
+scheduled start time of the next match. It also provides a match-running binary
+sensor. That entity is on only when Liquipedia explicitly identifies a match as
+live; it is off when no live match is reported. Match details are exposed as
+attributes including `title`, `team1`, `team2`, `tournament`, and `best_of`.
 
 Enter the title of the tournament's Match Schedule page, exactly as it appears
 after the game name in its Liquipedia URL. For example, this URL:
@@ -65,6 +68,25 @@ no state until one appears.
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+### CI & Release Candidates
+
+Every pull request targeting `main` automatically runs two checks:
+
+1. **Validate** – runs [hassfest](https://developers.home-assistant.io/docs/creating_integration_manifest/) and [HACS validation](https://github.com/hacs/action) to ensure the integration is well-formed.
+2. **Release Candidate** – creates a GitHub pre-release once validation passes, *only* when a bump label is applied to the PR.
+
+#### How to trigger a release candidate
+
+Apply exactly one of these labels to your PR before (or after) pushing commits:
+
+| Label | Effect | Example |
+|-------|--------|---------|
+| `bump:patch` | Increments the patch version | `0.2.0` → `0.2.1` |
+| `bump:minor` | Increments the minor version | `0.2.0` → `0.3.0` |
+| `bump:major` | Increments the major version | `0.2.0` → `1.0.0` |
+
+The pre-release tag follows the format `v{new-version}-rc.{pr-number}` (e.g. `v0.3.0-rc.5`). The tag is re-created on every new commit, so the pre-release always reflects the latest state of the PR. If multiple bump labels are present the highest precedence wins (`major > minor > patch`).
 
 ## License
 

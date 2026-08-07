@@ -5,12 +5,9 @@
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/KevinBacas/hacs-liquipedia-integration",
-  "homekit": {},
   "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/KevinBacas/hacs-liquipedia-integration/issues",
   "loggers": ["custom_components.liquipedia"],
   "requirements": [],
-  "ssdp": {},
-  "version": "0.2.0",
-  "zeroconf": {}
+  "version": "0.2.0"
 }

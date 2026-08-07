@@ -23,6 +23,7 @@ class _MatchScheduleParser(HTMLParser):
         super().__init__()
         self.matches: list[dict[str, Any]] = []
         self._row: list[dict[str, Any]] | None = None
+        self._row_status_values: list[str] = []
         self._cell: dict[str, Any] | None = None
 
     def handle_starttag(
@@ -32,27 +33,34 @@ class _MatchScheduleParser(HTMLParser):
         attributes = dict(attrs)
         if tag == "tr" and "row--body" in attributes.get("class", ""):
             self._row = []
-        elif self._row is not None and tag == "td":
-            self._cell = {"attributes": attributes, "links": [], "text": []}
-            self._row.append(self._cell)
-        elif self._cell is not None and tag == "span":
-            timestamp = attributes.get("data-timestamp")
-            if timestamp:
-                self._cell["timestamp"] = timestamp
-        elif self._cell is not None and tag == "a":
-            title = attributes.get("title")
-            if title and not title.startswith("Match:"):
-                self._cell["links"].append(title)
+            self._row_status_values = self._get_status_values(attributes)
+        elif self._row is not None:
+            self._row_status_values.extend(self._get_status_values(attributes))
+            if tag == "td":
+                self._cell = {"attributes": attributes, "links": [], "text": []}
+                self._row.append(self._cell)
+            elif self._cell is not None and tag == "span":
+                timestamp = attributes.get("data-timestamp")
+                if timestamp:
+                    self._cell["timestamp"] = timestamp
+            elif self._cell is not None and tag == "a":
+                title = attributes.get("title")
+                if title and not title.startswith("Match:"):
+                    self._cell["links"].append(title)
 
     def handle_endtag(self, tag: str) -> None:
         """Finish collecting a cell or a match row."""
         if tag == "td":
             self._cell = None
         elif tag == "tr" and self._row is not None:
-            match = self._build_match(self._row)
+            match = self._build_match(
+                self._row,
+                self._row_status_values,
+            )
             if match is not None:
                 self.matches.append(match)
             self._row = None
+            self._row_status_values = []
 
     def handle_data(self, data: str) -> None:
         """Collect visible cell text."""
@@ -60,7 +68,53 @@ class _MatchScheduleParser(HTMLParser):
             self._cell["text"].append(data.strip())
 
     @staticmethod
-    def _build_match(row: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def _get_status_values(attributes: dict[str, str | None]) -> list[str]:
+        """Return explicit status markers attached to a schedule element."""
+        values = [
+            attributes[key]
+            for key in (
+                "data-status",
+                "data-match-status",
+                "data-state",
+                "data-match-state",
+            )
+            if attributes.get(key)
+        ]
+        if class_name := attributes.get("class"):
+            values.append(class_name)
+        return values
+
+    @staticmethod
+    def _get_match_status(status_values: list[str]) -> str:
+        """Normalize an explicit status marker from Liquipedia's markup.
+
+        A start time alone is not evidence that a match is live.  Keep the
+        status unknown unless the source itself marks the match as live or
+        complete.
+        """
+        status = " ".join(status_values).lower().replace("_", "-")
+        if any(
+            value in status for value in ("live", "ongoing", "in-progress", "running")
+        ):
+            return "live"
+        if any(
+            value in status
+            for value in (
+                "finished",
+                "completed",
+                "cancelled",
+                "canceled",
+                "notplayed",
+            )
+        ):
+            return "finished"
+        return "unknown"
+
+    @staticmethod
+    def _build_match(
+        row: list[dict[str, Any]],
+        status_values: list[str],
+    ) -> dict[str, Any] | None:
         """Normalize one match-schedule table row."""
         if len(row) < 5:
             return None
@@ -83,6 +137,7 @@ class _MatchScheduleParser(HTMLParser):
             "team1": team1,
             "team2": team2,
             "date": date,
+            "status": _MatchScheduleParser._get_match_status(status_values),
             "best_of": (
                 match.group(0).upper()
                 if (match := _BEST_OF_PATTERN.search(format_text))
@@ -111,6 +166,12 @@ class LiquipediaAPI:
 
     async def get_upcoming_matches(self, page_title: str) -> list[dict[str, Any]]:
         """Return future matches from a tournament match-schedule page."""
+        matches = await self.get_matches(page_title)
+        now = datetime.now(timezone.utc)
+        return [match for match in matches if match["date"] >= now]
+
+    async def get_matches(self, page_title: str) -> list[dict[str, Any]]:
+        """Return matches from a tournament match-schedule page."""
         session = self._session
         if session is None:
             session = aiohttp.ClientSession(
@@ -140,9 +201,8 @@ class LiquipediaAPI:
 
         parser = _MatchScheduleParser()
         parser.feed(page_html)
-        now = datetime.now(timezone.utc)
         return sorted(
-            (match for match in parser.matches if match["date"] >= now),
+            parser.matches,
             key=lambda match: match["date"],
         )
 
