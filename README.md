@@ -69,24 +69,30 @@ no state until one appears.
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
-### CI & Release Candidates
+### CI and releases
 
-Every pull request targeting `main` automatically runs two checks:
+Every pull request targeting `main` runs hassfest and HACS validation. Apply
+exactly one version label before merging it:
 
-1. **Validate** – runs [hassfest](https://developers.home-assistant.io/docs/creating_integration_manifest/) and [HACS validation](https://github.com/hacs/action) to ensure the integration is well-formed.
-2. **Release Candidate** – creates a GitHub pre-release once validation passes, *only* when a bump label is applied to the PR.
+| Label | Use when the change is… |
+|-------|--------------------------|
+| `bump:patch` | a backwards-compatible bug fix |
+| `bump:minor` | backwards-compatible new functionality |
+| `bump:major` | a breaking change |
 
-#### How to trigger a release candidate
+When validation succeeds, the pull request gets a GitHub release candidate
+tagged as `v{new-version}-rc.{pr-number}`. Once it is merged, the stable
+release workflow validates `main`, updates `manifest.json`, creates the stable
+tag, and publishes the GitHub release.
 
-Apply exactly one of these labels to your PR before (or after) pushing commits:
+This follows [Semantic Versioning](https://semver.org/). Use Conventional
+Commits (`fix:`, `feat:`, and `feat!:` or a `BREAKING CHANGE:` footer) in the
+pull request commits to make the correct label easy for reviewers to choose.
+The label remains the explicit release decision used by automation.
 
-| Label | Effect | Example |
-|-------|--------|---------|
-| `bump:patch` | Increments the patch version | `0.2.0` → `0.2.1` |
-| `bump:minor` | Increments the minor version | `0.2.0` → `0.3.0` |
-| `bump:major` | Increments the major version | `0.2.0` → `1.0.0` |
-
-The pre-release tag follows the format `v{new-version}-rc.{pr-number}` (e.g. `v0.3.0-rc.5`). The tag is re-created on every new commit, so the pre-release always reflects the latest state of the PR. If multiple bump labels are present the highest precedence wins (`major > minor > patch`).
+The repository settings must allow `github-actions[bot]` to push its release
+commit to `main`; if branch protection is enabled, permit this app to bypass
+the rule.
 
 ## License
 

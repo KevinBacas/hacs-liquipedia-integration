@@ -68,26 +68,42 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
 
-      # Determine which bump type takes precedence (major > minor > patch).
+      # Require an unambiguous release decision.
       - name: Determine bump type
         id: bump
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
-          if [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:major') }}" == "true" ]]; then
+          bump_count=$(jq '[.[] | select(. == "bump:major" or . == "bump:minor" or . == "bump:patch")] | length' <<< "$LABELS")
+          if [ "$bump_count" -ne 1 ]; then
+            echo "Exactly one bump label is required." >&2
+            exit 1
+          fi
+
+          if jq -e 'index("bump:major")' <<< "$LABELS" > /dev/null; then
             echo "type=major" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ contains(github.event.pull_request.labels.*.name, 'bump:minor') }}" == "true" ]]; then
+          elif jq -e 'index("bump:minor")' <<< "$LABELS" > /dev/null; then
             echo "type=minor" >> "$GITHUB_OUTPUT"
           else
             echo "type=patch" >> "$GITHUB_OUTPUT"
           fi
 
-      # Read current version from manifest.json and compute the next one.
+      # Derive the next version from the latest stable tag. This keeps release
+      # candidates monotonic when manifest.json has not yet been updated by a
+      # stable release commit.
       - name: Compute next version
         id: version
         run: |
-          current=$(jq -r '.version' custom_components/liquipedia/manifest.json)
-          # Strip any pre-release suffix (e.g. 0.2.0-rc.1 → 0.2.0)
-          base="${current%%-*}"
-          IFS='.' read -r major minor patch <<< "$base"
+          current_tag=$(git tag -l 'v*' --sort=-version:refname | \
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+
+          if [ -n "$current_tag" ]; then
+            current="${current_tag#v}"
+          else
+            current=$(jq -er '.version' custom_components/liquipedia/manifest.json)
+          fi
+
+          IFS='.' read -r major minor patch <<< "$current"
           case "${{ steps.bump.outputs.type }}" in
             major) new="$((major + 1)).0.0" ;;
             minor) new="${major}.$((minor + 1)).0" ;;

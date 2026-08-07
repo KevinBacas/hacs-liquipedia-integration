@@ -1,0 +1,120 @@
+name: Validate and release
+
+# A stable release is made only after a PR has actually been merged into main.
+# Its version is selected explicitly with one of the bump labels documented in
+# the README: bump:major, bump:minor, or bump:patch.
+on:
+  pull_request:
+    branches: [main]
+    types: [closed]
+
+# Serialise releases so two merged PRs cannot calculate the same next version.
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate merged changes
+    if: >-
+      github.event.pull_request.merged == true &&
+      (contains(github.event.pull_request.labels.*.name, 'bump:major') ||
+      contains(github.event.pull_request.labels.*.name, 'bump:minor') ||
+      contains(github.event.pull_request.labels.*.name, 'bump:patch'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Run hassfest
+        uses: home-assistant/actions/hassfest@master
+
+      - name: HACS validation
+        uses: hacs/action@main
+        with:
+          category: integration
+
+  release:
+    name: Create stable release
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main and tags
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Determine version bump
+        id: bump
+        env:
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          bump_count=$(jq '[.[] | select(. == "bump:major" or . == "bump:minor" or . == "bump:patch")] | length' <<< "$LABELS")
+          if [ "$bump_count" -ne 1 ]; then
+            echo "Exactly one bump label is required." >&2
+            exit 1
+          fi
+
+          if jq -e 'index("bump:major")' <<< "$LABELS" > /dev/null; then
+            echo "type=major" >> "$GITHUB_OUTPUT"
+          elif jq -e 'index("bump:minor")' <<< "$LABELS" > /dev/null; then
+            echo "type=minor" >> "$GITHUB_OUTPUT"
+          else
+            echo "type=patch" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Compute next stable version
+        id: version
+        env:
+          BUMP_TYPE: ${{ steps.bump.outputs.type }}
+        run: |
+          # The latest stable tag is the source of truth. This prevents a
+          # stale manifest version from producing a release older than a tag.
+          current_tag=$(git tag -l 'v*' --sort=-version:refname | \
+            grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
+
+          if [ -n "$current_tag" ]; then
+            current="${current_tag#v}"
+          else
+            current=$(jq -er '.version' custom_components/liquipedia/manifest.json)
+          fi
+
+          IFS='.' read -r major minor patch <<< "$current"
+          case "$BUMP_TYPE" in
+            major) next="$((major + 1)).0.0" ;;
+            minor) next="${major}.$((minor + 1)).0" ;;
+            patch) next="${major}.${minor}.$((patch + 1))" ;;
+            *) echo "Unknown bump type: $BUMP_TYPE" >&2; exit 1 ;;
+          esac
+
+          echo "version=$next" >> "$GITHUB_OUTPUT"
+          echo "tag=v$next" >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest, tag, and push
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          jq --arg version "$VERSION" '.version = $version' \
+            custom_components/liquipedia/manifest.json > /tmp/manifest.json
+          mv /tmp/manifest.json custom_components/liquipedia/manifest.json
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add custom_components/liquipedia/manifest.json
+          git commit -m "chore(release): $TAG"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin HEAD:main --follow-tags
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: gh release create "$TAG" --title "$TAG" --generate-notes
