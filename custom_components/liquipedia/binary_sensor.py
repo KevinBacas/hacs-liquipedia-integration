@@ -26,7 +26,6 @@ async def async_setup_entry(
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     async_add_entities(
         [LiquipediaMatchRunningBinarySensor(coordinator, config_entry)],
-        True,
     )
 
 

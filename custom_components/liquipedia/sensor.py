@@ -38,7 +38,10 @@ async def async_setup_entry(
 ) -> None:
     """Set up the Liquipedia sensor platform."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
-    async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)], True)
+    # The integration already performed the coordinator's first refresh.
+    # Updating again here can wait for the API rate limit and exceed the
+    # entity platform's startup timeout.
+    async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)])
 
 
 class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
