@@ -38,7 +38,7 @@
   "selector": {
     "tournament": {
       "options": {
-        "__manual__": "Saisir un calendrier manuellement"
+        "manual-entry": "Saisir un calendrier manuellement"
       }
     }
   }

@@ -46,7 +46,7 @@ async def test_empty_or_failed_discovery_keeps_manual_setup(failure):
     ):
         result = await flow.async_step_user({"name": "Cup", "game": "dota2"})
     assert result["errors"]["base"] == ("cannot_connect" if failure else "no_tournaments")
-    result = await flow.async_step_tournament({"tournament": "__manual__"})
+    result = await flow.async_step_tournament({"tournament": "manual-entry"})
     assert result["step_id"] == "manual"
     result = await flow.async_step_manual({"tournament": " Cup/Match Schedule "})
     assert result["data"]["tournament"] == "Cup/Match Schedule"
@@ -76,5 +76,5 @@ async def test_french_labels_and_manual_option_are_available():
     assert select.config["options"] == [
         {"value": "Cup", "label": "Cup (À venir) — Oct 3"},
         {"value": "League", "label": "League (En cours)"},
-        {"value": "__manual__", "label": "manual"},
+        {"value": "manual-entry", "label": "manual"},
     ]

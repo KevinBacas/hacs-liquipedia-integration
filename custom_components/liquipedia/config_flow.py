@@ -16,7 +16,7 @@ from homeassistant.helpers import selector
 from .api import LiquipediaAPI
 from .const import DOMAIN, CONF_GAME, CONF_TOURNAMENT, DEFAULT_GAME, SUPPORTED_GAMES
 
-_MANUAL = "__manual__"
+_MANUAL = "manual-entry"
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_NAME, default="Liquipedia"): str,

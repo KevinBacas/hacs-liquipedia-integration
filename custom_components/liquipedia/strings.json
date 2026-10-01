@@ -38,7 +38,7 @@
   "selector": {
     "tournament": {
       "options": {
-        "__manual__": "Enter a schedule manually"
+        "manual-entry": "Enter a schedule manually"
       }
     }
   }
