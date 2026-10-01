@@ -5,7 +5,8 @@ from Liquipedia.
 
 ## Features
 
-- Select a game and a Liquipedia Match Schedule page during setup
+- Choose a game, then select an ongoing tournament or one starting in the next 30 days
+- Keep manual Match Schedule page entry available for unlisted tournaments
 - Create one timestamp sensor for the next scheduled match
 - Create a match-running binary sensor when Liquipedia explicitly marks a match live
 - Expose the match title, both team names, tournament, and format as attributes
@@ -34,7 +35,9 @@ from Liquipedia.
 1. Go to Configuration → Integrations
 2. Click the "+" button
 3. Search for "Liquipedia Integration"
-4. Follow the setup wizard
+4. Enter a name and choose a game, then continue to load the tournament list
+5. Select an ongoing tournament or one starting in the next 30 days
+6. If the list is unavailable, empty, or your tournament is missing, choose manual entry
 
 ## Usage
 
@@ -44,7 +47,13 @@ sensor. That entity is on only when Liquipedia explicitly identifies a match as
 live; it is off when no live match is reported. Match details are exposed as
 attributes including `title`, `team1`, `team2`, `tournament`, and `best_of`.
 
-Enter the title of the tournament's Match Schedule page, exactly as it appears
+The list comes from the selected wiki’s tournament ticker, using a rolling
+30-day window. Finished tournaments are excluded. Selecting a tournament uses
+its embedded match table or an existing Match Schedule link; tournaments without
+a supported schedule require manual entry. Availability depends on Liquipedia’s
+data and ticker support for the game.
+
+For manual entry, enter the title of the tournament's Match Schedule page, exactly as it appears
 after the game name in its Liquipedia URL. For example, this URL:
 `https://liquipedia.net/leagueoflegends/First_Stand_Tournament/2026/Match_Schedule`
 uses the page title `First Stand Tournament/2026/Match Schedule`. Choose a page

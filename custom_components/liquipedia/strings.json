@@ -3,19 +3,43 @@
     "step": {
       "user": {
         "title": "Configure Liquipedia",
-        "description": "Choose the game and enter the Match Schedule page title from Liquipedia, for example: First Stand Tournament/2026/Match Schedule.",
+        "description": "Choose a game to load its ongoing tournaments and those starting in the next 30 days.",
         "data": {
           "name": "Name",
-          "game": "Game",
+          "game": "Game"
+        }
+      },
+      "tournament": {
+        "title": "Choose a tournament",
+        "description": "Select a tournament in progress or starting in the next 30 days. If yours is missing, choose manual entry.",
+        "data": {
+          "tournament": "Tournament"
+        }
+      },
+      "manual": {
+        "title": "Enter a match schedule",
+        "description": "Enter the Match Schedule page title from Liquipedia, for example: First Stand Tournament/2026/Match Schedule.",
+        "data": {
           "tournament": "Match Schedule page"
         }
       }
     },
     "error": {
-      "invalid_game": "Select a supported game."
+      "invalid_game": "Select a supported game.",
+      "invalid_tournament": "Select a tournament from the list.",
+      "cannot_connect": "Unable to load Liquipedia data. Try again or choose manual entry.",
+      "no_tournaments": "No tournaments were found in this period. You can enter a schedule manually.",
+      "no_schedule": "No supported match schedule was found. Choose another tournament or enter its schedule manually."
     },
     "abort": {
       "already_configured": "This game and tournament are already configured."
+    }
+  },
+  "selector": {
+    "tournament": {
+      "options": {
+        "__manual__": "Enter a schedule manually"
+      }
     }
   }
 }
