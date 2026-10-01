@@ -1,0 +1,45 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configurer Liquipedia",
+        "description": "Choisissez un jeu pour charger ses tournois en cours et ceux qui débutent dans les 30 prochains jours.",
+        "data": {
+          "name": "Nom",
+          "game": "Jeu"
+        }
+      },
+      "tournament": {
+        "title": "Choisir un tournoi",
+        "description": "Sélectionnez un tournoi en cours ou qui débute dans les 30 prochains jours. S’il manque, choisissez la saisie manuelle.",
+        "data": {
+          "tournament": "Tournoi"
+        }
+      },
+      "manual": {
+        "title": "Saisir un calendrier de matchs",
+        "description": "Saisissez le titre de la page Match Schedule sur Liquipedia, par exemple : First Stand Tournament/2026/Match Schedule.",
+        "data": {
+          "tournament": "Page Match Schedule"
+        }
+      }
+    },
+    "error": {
+      "invalid_game": "Sélectionnez un jeu pris en charge.",
+      "invalid_tournament": "Sélectionnez un tournoi dans la liste.",
+      "cannot_connect": "Impossible de charger les données Liquipedia. Réessayez ou choisissez la saisie manuelle.",
+      "no_tournaments": "Aucun tournoi trouvé sur cette période. Vous pouvez saisir un calendrier manuellement.",
+      "no_schedule": "Aucun calendrier de matchs compatible trouvé. Choisissez un autre tournoi ou saisissez son calendrier manuellement."
+    },
+    "abort": {
+      "already_configured": "Ce jeu et ce tournoi sont déjà configurés."
+    }
+  },
+  "selector": {
+    "tournament": {
+      "options": {
+        "manual-entry": "Saisir un calendrier manuellement"
+      }
+    }
+  }
+}

@@ -146,6 +146,57 @@ class _MatchScheduleParser(HTMLParser):
         }
 
 
+class _TournamentListParser(HTMLParser):
+    """Read the names and dates from Liquipedia's tournament ticker."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tournaments: dict[str, str] = {}
+        self._stack: list[tuple[str, set[str]]] = []
+        self._phase = ""
+        self._heading: list[str] | None = None
+        self._link: dict[str, Any] | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = set((attributes.get("class") or "").split())
+        if tag not in {"br", "img", "hr", "input", "meta", "link", "wbr"}:
+            self._stack.append((tag, classes))
+        if "tournaments-list-heading" in classes:
+            self._heading = []
+        is_name = any("tournament-name" in classes for _, classes in self._stack)
+        is_date = any("tournaments-list-dates" in classes for _, classes in self._stack)
+        if tag == "a" and (is_name or is_date):
+            title = attributes.get("title")
+            if title and ":" not in title and "new" not in classes:
+                self._link = {"title": title, "text": [], "is_date": is_date}
+
+    def handle_data(self, data: str) -> None:
+        if self._heading is not None:
+            self._heading.append(data)
+        if self._link is not None:
+            self._link["text"].append(data)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag == "a" and self._link is not None:
+            if self._phase in {"Upcoming", "Ongoing"}:
+                title = self._link["title"].replace("_", " ")
+                name = "".join(self._link["text"]).strip() or title
+                if self._link["is_date"]:
+                    if title in self.tournaments and name:
+                        self.tournaments[title] += f" — {name}"
+                else:
+                    self.tournaments[title] = f"{name} ({self._phase})"
+            self._link = None
+        for index in range(len(self._stack) - 1, -1, -1):
+            if self._stack[index][0] == tag:
+                if "tournaments-list-heading" in self._stack[index][1]:
+                    self._phase = "".join(self._heading or []).strip()
+                    self._heading = None
+                del self._stack[index:]
+                break
+
+
 class LiquipediaAPI:
     """Fetch upcoming matches from a game-specific Liquipedia wiki."""
 
@@ -172,32 +223,8 @@ class LiquipediaAPI:
 
     async def get_matches(self, page_title: str) -> list[dict[str, Any]]:
         """Return matches from a tournament match-schedule page."""
-        session = self._session
-        if session is None:
-            session = aiohttp.ClientSession(
-                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
-                timeout=aiohttp.ClientTimeout(total=30),
-            )
-            self._session = session
-
-        params = {
-            "action": "parse",
-            "format": "json",
-            "page": page_title,
-            "prop": "text",
-        }
-        await self._async_wait_for_parse_slot()
-        async with session.get(self._base_url, params=params) as response:
-            response.raise_for_status()
-            payload = await response.json()
-
-        if error := payload.get("error"):
-            raise ValueError(error.get("info", "Liquipedia could not parse the page"))
-
-        try:
-            page_html = payload["parse"]["text"]["*"]
-        except KeyError as error:
-            raise ValueError("Liquipedia returned an unexpected API response") from error
+        payload = await self._async_parse({"page": page_title})
+        page_html = payload["parse"]["text"]["*"]
 
         parser = _MatchScheduleParser()
         parser.feed(page_html)
@@ -205,6 +232,72 @@ class LiquipediaAPI:
             parser.matches,
             key=lambda match: match["date"],
         )
+
+    async def get_tournaments(self) -> dict[str, str]:
+        """Return ongoing tournaments and those starting in the next 30 days.
+
+        Ask the wiki's ticker to filter its tournament database, rather than
+        relying on the shorter time window displayed on the main page.
+        """
+        payload = await self._async_parse({
+            "text": (
+                "{{#invoke:Widget/Factory|fromTemplate"
+                "|widget=Tournaments/Ticker|upcomingDays=30|completedDays=0}}"
+            ),
+            "contentmodel": "wikitext",
+            "title": "Main Page",
+        })
+        page_html = payload["parse"]["text"]["*"]
+        if "tournaments-list" not in page_html:
+            raise ValueError("Liquipedia tournament discovery is unavailable")
+        parser = _TournamentListParser()
+        parser.feed(page_html)
+        return parser.tournaments
+
+    async def get_schedule_page(self, tournament: str) -> str:
+        """Find an existing schedule page without guessing a subpage title."""
+        payload = await self._async_parse({"page": tournament}, prop="text|links")
+        parser = _MatchScheduleParser()
+        parser.feed(payload["parse"]["text"]["*"])
+        if parser.matches:
+            return tournament
+        for link in payload["parse"].get("links", []):
+            title = link.get("*", "").replace("_", " ")
+            if (
+                link.get("ns") == 0
+                and "exists" in link
+                and title.startswith(f"{tournament}/")
+                and title.endswith("/Match Schedule")
+            ):
+                return title
+        raise ValueError("No supported match schedule found for this tournament")
+
+    async def _async_parse(
+        self, source: dict[str, str], *, prop: str = "text"
+    ) -> dict[str, Any]:
+        """Fetch parsed wikitext using the shared API rate limit."""
+        if self._session is None:
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
+                timeout=aiohttp.ClientTimeout(total=30),
+            )
+        params = {"action": "parse", "format": "json", "prop": prop, **source}
+        await self._async_wait_for_parse_slot()
+        async with self._session.get(
+            self._base_url,
+            params=params,
+            headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
+        ) as response:
+            response.raise_for_status()
+            payload = await response.json()
+        if error := payload.get("error"):
+            raise ValueError(error.get("info", "Liquipedia could not parse the page"))
+        try:
+            if not isinstance(payload["parse"]["text"]["*"], str):
+                raise ValueError("Liquipedia returned an unexpected API response")
+        except (KeyError, TypeError) as error:
+            raise ValueError("Liquipedia returned an unexpected API response") from error
+        return payload
 
     async def _async_wait_for_parse_slot(self) -> None:
         """Respect Liquipedia's one action=parse request per 30-second limit."""
