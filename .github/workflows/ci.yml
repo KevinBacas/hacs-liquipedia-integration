@@ -6,7 +6,7 @@ name: CI & Release Candidate
 #   2. release-candidate – runs only when a bump label is present on the PR
 #      (bump:patch, bump:minor, or bump:major) and validate passes.
 #      It bumps the version in manifest.json on a detached commit, force-pushes
-#      an RC tag (e.g. v0.3.0-rc.42), then creates/updates a GitHub pre-release.
+#      an RC tag with the workflow run number, then publishes the pre-release.
 
 on:
   pull_request:
@@ -124,9 +124,9 @@ jobs:
             minor) new="${major}.$((minor + 1)).0" ;;
             *)     new="${major}.${minor}.$((patch + 1))" ;;
           esac
-          pr="${{ github.event.pull_request.number }}"
-          echo "version=${new}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${new}-rc.${pr}" >> "$GITHUB_OUTPUT"
+          version="${new}-rc.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
       # Bump the version in manifest.json, commit on the detached HEAD, then
       # force-push only the tag (the PR branch is NOT modified).

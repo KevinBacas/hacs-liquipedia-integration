@@ -103,7 +103,9 @@ Apply exactly one version label before merging it:
 | `bump:major` | a breaking change |
 
 When validation succeeds, the pull request gets a GitHub release candidate
-tagged as `v{new-version}-rc.{pr-number}`. Once it is merged, the stable
+tagged as `v{new-version}-rc.{workflow-run-number}`. Each new workflow run
+gets a version that Home Assistant can recognize as a separate update.
+Once the pull request is merged, the stable
 release workflow validates `main`, updates `manifest.json`, creates the stable
 tag, and publishes the GitHub release.
 
