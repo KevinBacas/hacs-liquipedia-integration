@@ -2,7 +2,7 @@ name: CI & Release Candidate
 
 # Triggered on every PR update and when labels are added/removed.
 # Two jobs:
-#   1. validate  – always runs: hassfest + HACS validation.
+#   1. validate  – always runs: pytest, hassfest, and HACS validation.
 #   2. release-candidate – runs only when a bump label is present on the PR
 #      (bump:patch, bump:minor, or bump:major) and validate passes.
 #      It bumps the version in manifest.json on a detached commit, force-pushes
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Validate the integration with hassfest and HACS tooling.
+  # Job 1: Run the tests and validate the integration with hassfest and HACS.
   # ---------------------------------------------------------------------------
   validate:
     name: Validate
@@ -33,6 +33,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-test.txt
+
+      - name: Run pytest
+        run: python -m pytest -q
 
       - name: Run hassfest
         uses: home-assistant/actions/hassfest@master
@@ -117,8 +132,8 @@ jobs:
       # force-push only the tag (the PR branch is NOT modified).
       - name: Bump manifest.json and create RC tag
         run: |
-          version="${{ steps.version.outputs.version }}"
           tag="${{ steps.version.outputs.tag }}"
+          version="${tag#v}"
 
           jq --arg v "$version" '.version = $v' \
             custom_components/liquipedia/manifest.json > /tmp/manifest.json
@@ -140,11 +155,11 @@ jobs:
       - name: Create or update GitHub pre-release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
           tag="${{ steps.version.outputs.tag }}"
           version="${{ steps.version.outputs.version }}"
           pr="${{ github.event.pull_request.number }}"
-          title="${{ github.event.pull_request.title }}"
 
           # Delete the existing pre-release for this tag if it already exists,
           # so we always have a fresh one pointing to the latest commit.
@@ -153,5 +168,5 @@ jobs:
           gh release create "$tag" \
             --title "v${version} – Release Candidate (PR #${pr})" \
             --notes "$(printf '## Release Candidate for v%s\n\nPR #%s: %s\n\nThis pre-release was created automatically by CI.\nIt will be promoted to a stable release once the PR is merged.' \
-              "$version" "$pr" "$title")" \
+              "$version" "$pr" "$PR_TITLE")" \
             --prerelease

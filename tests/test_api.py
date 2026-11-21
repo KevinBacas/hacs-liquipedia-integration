@@ -1,9 +1,11 @@
 """Tests for Liquipedia schedule parsing."""
 
-from unittest.mock import AsyncMock
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from custom_components.liquipedia import api as api_module
 from custom_components.liquipedia.api import (
     LiquipediaAPI,
     _MatchScheduleParser,
@@ -127,8 +129,6 @@ async def test_schedule_resolution_keeps_embedded_match_table():
     {"parse": {"text": {"*": None}}},
 ])
 async def test_api_rejects_errors_and_malformed_responses(payload):
-    from unittest.mock import MagicMock
-
     session = MagicMock()
     response = MagicMock()
     response.json = AsyncMock(return_value=payload)
@@ -141,3 +141,111 @@ async def test_api_rejects_errors_and_malformed_responses(payload):
     api._async_wait_for_parse_slot.assert_awaited_once()
     assert session.get.call_args.kwargs["params"]["page"] == "Cup"
     assert "User-Agent" in session.get.call_args.kwargs["headers"]
+
+
+def _mock_session(read_json: AsyncMock) -> MagicMock:
+    session = MagicMock()
+    response = MagicMock(json=read_json)
+    session.get.return_value.__aenter__ = AsyncMock(return_value=response)
+    session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+    return session
+
+
+@pytest.mark.asyncio
+async def test_page_parse_is_shared_by_schedule_resolution_and_updates() -> None:
+    started = asyncio.Event()
+    release_response = asyncio.Event()
+
+    async def read_json() -> dict:
+        started.set()
+        await release_response.wait()
+        return {"parse": {"text": {"*": ""}, "links": [
+            {"ns": 0, "*": "Test Cup/Main Event/Match Schedule", "exists": ""},
+        ]}}
+
+    session = _mock_session(AsyncMock(side_effect=read_json))
+    first_api = LiquipediaAPI("valorant", session)
+    second_api = LiquipediaAPI("valorant", session)
+    lookup = asyncio.create_task(first_api.get_schedule_page("Test_Cup"))
+    await started.wait()
+    update = asyncio.create_task(second_api.get_matches("Test Cup"))
+    await asyncio.sleep(0)
+    release_response.set()
+
+    assert await lookup == "Test Cup/Main Event/Match Schedule"
+    assert await update == []
+    assert await second_api.get_matches("Test Cup") == []
+    session.get.assert_called_once()
+    assert session.get.call_args.kwargs["params"]["redirects"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_cancelling_one_waiter_keeps_shared_fetch_alive() -> None:
+    started = asyncio.Event()
+    release_response = asyncio.Event()
+
+    async def read_json() -> dict:
+        started.set()
+        await release_response.wait()
+        return {"parse": {"text": {"*": ""}}}
+
+    session = _mock_session(AsyncMock(side_effect=read_json))
+    api = LiquipediaAPI("valorant", session)
+    first_update = asyncio.create_task(api.get_matches("Cup"))
+    await started.wait()
+    second_update = asyncio.create_task(api.get_matches("Cup"))
+    await asyncio.sleep(0)
+    first_update.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first_update
+    release_response.set()
+
+    assert await second_update == []
+    session.get.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_rate_budget_is_shared_by_three_cold_parses_and_a_query(monkeypatch) -> None:
+    monkeypatch.setattr(api_module, "_REQUEST_INTERVAL_SECONDS", 0.01)
+    monkeypatch.setattr(api_module, "_PARSE_REQUEST_INTERVAL_SECONDS", 0.04)
+    monkeypatch.setattr(api_module, "_MAX_PARSE_WAIT_SECONDS", 0.2)
+    session = _mock_session(AsyncMock(return_value={
+        "parse": {"text": {"*": ""}}, "batchcomplete": True,
+    }))
+    http_starts = []
+
+    def start_request(url: str, **kwargs):
+        http_starts.append((url, kwargs["params"]["action"], asyncio.get_running_loop().time()))
+        return session.get.return_value
+
+    session.get.side_effect = start_request
+    cs = LiquipediaAPI("counterstrike", session)
+    lol = LiquipediaAPI("leagueoflegends", session)
+    tournament = LiquipediaAPI("valorant", session)
+    assert await asyncio.gather(
+        cs.get_matches("First"), lol.search_teams("T1"),
+        lol.get_matches("Second"), tournament.get_matches("Third"),
+    ) == [[], [], [], []]
+
+    parse_starts = [started for _, action, started in http_starts if action == "parse"]
+    assert len(parse_starts) == 3
+    assert len({url for url, _, _ in http_starts}) == 3
+    assert all(next_start - previous >= 0.039 for previous, next_start in zip(
+        parse_starts, parse_starts[1:]
+    ))
+    all_starts = [started for _, _, started in http_starts]
+    assert all(next_start - previous >= 0.009 for previous, next_start in zip(
+        all_starts, all_starts[1:]
+    ))
+
+
+@pytest.mark.asyncio
+async def test_busy_parse_budget_expires_before_another_http_request(monkeypatch) -> None:
+    monkeypatch.setattr(api_module, "_MAX_PARSE_WAIT_SECONDS", 0.01)
+    session = _mock_session(AsyncMock(return_value={"parse": {"text": {"*": ""}}}))
+    api = LiquipediaAPI("counterstrike", session)
+
+    assert await api.get_matches("First") == []
+    with pytest.raises(TimeoutError, match="parse request queue is busy"):
+        await api.get_matches("Second")
+    session.get.assert_called_once()

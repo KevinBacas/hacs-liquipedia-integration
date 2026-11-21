@@ -13,8 +13,8 @@ from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import CONF_GAME, DOMAIN
-from .sensor import LiquipediaDataUpdateCoordinator
+from .const import DOMAIN
+from .coordinator import LiquipediaDataUpdateCoordinator
 
 
 async def async_setup_entry(
@@ -41,44 +41,46 @@ class LiquipediaMatchRunningBinarySensor(
     ) -> None:
         """Initialize the binary sensor."""
         super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._game = config_entry.data[CONF_GAME]
-        self._attr_name = f"{self._game.title()} Match Running"
+        self._attr_name = f"{coordinator.label} Match Running"
         self._attr_unique_id = f"{config_entry.entry_id}_match_running"
         self._attr_device_class = BinarySensorDeviceClass.RUNNING
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"Liquipedia {self._game.title()}",
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"Liquipedia {coordinator.label}",
             manufacturer="Liquipedia",
-            model=self._game.title(),
+            model=coordinator.label,
         )
 
     @property
     def _current_match(self) -> dict[str, Any] | None:
         """Return the match Liquipedia explicitly marks as live."""
-        for match in reversed(self.coordinator.data):
+        if self.coordinator.data is None:
+            return None
+        for match in reversed(self.coordinator.data.matches):
             if match.get("status") == "live":
                 return match
         return None
 
     @property
-    def is_on(self) -> bool:
+    def is_on(self) -> bool | None:
         """Return whether a match is currently running."""
-        return self._current_match is not None
+        if self._current_match is not None:
+            return True
+        if self.coordinator.data is None or self.coordinator.data.unavailable_games:
+            return None
+        return False
 
     @property
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the current match details."""
         match = self._current_match
+        attributes = self.coordinator.match_attributes(match)
         if match is None:
-            return None
-        return {
-            "title": match["title"],
-            "team1": match["team1"],
-            "team2": match["team2"],
-            "best_of": match.get("best_of"),
-        }
+            return attributes or None
+        attributes.update(
+            title=match["title"],
+            team1=match["team1"],
+            team2=match["team2"],
+            best_of=match.get("best_of"),
+        )
+        return attributes

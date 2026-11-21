@@ -2,17 +2,49 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-import re
 from typing import Any
+from urllib.parse import urlsplit
+from weakref import WeakKeyDictionary
 
 import aiohttp
 
 from .const import LIQUIPEDIA_API_URL, USER_AGENT
+from .team_parser import BEST_OF_PATTERN, TeamPageParser, normalize_title
 
-_BEST_OF_PATTERN = re.compile(r"\bBo\d+\b", re.IGNORECASE)
 _PARSE_REQUEST_INTERVAL_SECONDS = 30
+_REQUEST_INTERVAL_SECONDS = 2
+_MAX_PARSE_WAIT_SECONDS = 125
+_PARSE_CACHE_SECONDS = 120
+_PARSE_CACHE_SIZE = 32
+_TEAM_INFOBOX = "Template:Infobox team"
+
+_ParseKey = tuple[str, tuple[tuple[str, str], ...]]
+
+
+class TeamNotFoundError(ValueError):
+    """The supplied title does not identify a team on the game wiki."""
+
+
+@dataclass
+class _PendingParse:
+    task: asyncio.Task[dict[str, Any]]
+    waiters: int = 0
+
+
+@dataclass
+class _HostRequests:
+    next_request: float = 0
+    next_parse: float = 0
+    request_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    parse_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    parses: dict[_ParseKey, _PendingParse] = field(default_factory=dict)
+    cache: OrderedDict[_ParseKey, tuple[float, dict[str, Any]]] = field(
+        default_factory=OrderedDict,
+    )
 
 
 class _MatchScheduleParser(HTMLParser):
@@ -140,7 +172,7 @@ class _MatchScheduleParser(HTMLParser):
             "status": _MatchScheduleParser._get_match_status(status_values),
             "best_of": (
                 match.group(0).upper()
-                if (match := _BEST_OF_PATTERN.search(format_text))
+                if (match := BEST_OF_PATTERN.search(format_text))
                 else None
             ),
         }
@@ -200,14 +232,17 @@ class _TournamentListParser(HTMLParser):
 class LiquipediaAPI:
     """Fetch upcoming matches from a game-specific Liquipedia wiki."""
 
-    _parse_locks: dict[str, asyncio.Lock] = {}
-    _last_parse_requests: dict[str, float] = {}
+    _requests_by_loop: WeakKeyDictionary[
+        asyncio.AbstractEventLoop, dict[str, _HostRequests]
+    ] = WeakKeyDictionary()
 
     def __init__(self, game: str, session: aiohttp.ClientSession | None = None) -> None:
         """Initialize the API client."""
         self._session = session
         self._owns_session = session is None
+        self._game = game
         self._base_url = LIQUIPEDIA_API_URL.format(game=game)
+        self._host = urlsplit(self._base_url).netloc
 
     async def async_close(self) -> None:
         """Close a session created by this client."""
@@ -257,6 +292,7 @@ class LiquipediaAPI:
     async def get_schedule_page(self, tournament: str) -> str:
         """Find an existing schedule page without guessing a subpage title."""
         payload = await self._async_parse({"page": tournament}, prop="text|links")
+        tournament = normalize_title(payload["parse"].get("title") or tournament)
         parser = _MatchScheduleParser()
         parser.feed(payload["parse"]["text"]["*"])
         if parser.matches:
@@ -272,43 +308,178 @@ class LiquipediaAPI:
                 return title
         raise ValueError("No supported match schedule found for this tournament")
 
-    async def _async_parse(
-        self, source: dict[str, str], *, prop: str = "text"
-    ) -> dict[str, Any]:
-        """Fetch parsed wikitext using the shared API rate limit."""
-        if self._session is None:
-            self._session = aiohttp.ClientSession(
-                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
-                timeout=aiohttp.ClientTimeout(total=30),
+    async def search_teams(self, query: str) -> list[str]:
+        """Find canonical team pages by title prefix on the selected wiki."""
+        if not (query := normalize_title(query)):
+            return []
+        pages = await self._async_team_pages({
+            "generator": "prefixsearch",
+            "gpssearch": query,
+            "gpsnamespace": "0",
+            "gpslimit": "20",
+        })
+        ranked = sorted(
+            pages,
+            key=lambda page: index if isinstance(index := page.get("index"), int) else float("inf"),
+        )
+        return list(dict.fromkeys(page["title"] for page in ranked))
+
+    async def resolve_team(self, title: str) -> str:
+        """Resolve an exact or redirected title to a canonical team page."""
+        title = normalize_title(title)
+        if not title or "|" in title or "#" in title:
+            raise TeamNotFoundError("Enter a single Liquipedia team page title")
+        pages = await self._async_team_pages({"titles": title})
+        if len(pages) != 1:
+            raise TeamNotFoundError("No Liquipedia team page was found for this title")
+        return pages[0]["title"]
+
+    async def _async_team_pages(self, source: dict[str, str]) -> list[dict[str, Any]]:
+        payload = await self._async_request({
+            "action": "query",
+            "format": "json",
+            "formatversion": "2",
+            "redirects": "1",
+            "prop": "templates",
+            "tltemplates": _TEAM_INFOBOX,
+            "tllimit": "50",
+            **source,
+        })
+        query = payload.get("query")
+        if query is None and payload.get("batchcomplete") is True:
+            return []
+        if not isinstance(query, dict) or not isinstance(pages := query.get("pages"), list):
+            raise ValueError("Liquipedia returned an unexpected team lookup response")
+        return [
+            page for page in pages
+            if isinstance(page, dict)
+            and page.get("ns") == 0
+            and "missing" not in page
+            and "invalid" not in page
+            and isinstance(page.get("title"), str)
+            and isinstance(page.get("templates"), list)
+            and any(
+                isinstance(template, dict) and template.get("title") == _TEAM_INFOBOX
+                for template in page["templates"]
             )
-        params = {"action": "parse", "format": "json", "prop": prop, **source}
+        ]
+
+    async def get_team_matches(self, team: str) -> list[dict[str, Any]]:
+        """Return normalized scheduled or ongoing matches from a team page."""
+        payload = await self._async_parse({"page": team})
+        parsed = payload["parse"]
+        title = parsed.get("title")
+        if not isinstance(title, str) or not (title := normalize_title(title)):
+            raise ValueError("Liquipedia returned an unexpected team page response")
+
+        return await asyncio.to_thread(
+            TeamPageParser.parse_matches, parsed["text"]["*"], title, self._game
+        )
+
+    async def _async_parse(
+        self, source: dict[str, str], *, prop: str | None = None
+    ) -> dict[str, Any]:
+        """Share short-lived page results and in-flight requests across clients."""
+        if page := source.get("page"):
+            # Schedule resolution also needs links. Sharing one representation
+            # lets setup, refreshes, and other consumers reuse the same response.
+            source = {**source, "page": normalize_title(page), "redirects": "1"}
+            prop = prop or "text|links"
+        params = {"action": "parse", "format": "json", "prop": prop or "text", **source}
+        key = self._base_url, tuple(sorted(params.items()))
+        state = self._host_requests()
+        loop = asyncio.get_running_loop()
+        if cached := state.cache.get(key):
+            expires_at, payload = cached
+            if loop.time() < expires_at:
+                state.cache.move_to_end(key)
+                return payload
+            del state.cache[key]
+
+        if (pending := state.parses.get(key)) is None:
+            task = loop.create_task(self._async_fetch_parse(params, state, key))
+            pending = state.parses[key] = _PendingParse(task)
+
+        pending.waiters += 1
+        try:
+            return await asyncio.shield(pending.task)
+        finally:
+            pending.waiters -= 1
+            if pending.waiters == 0:
+                del state.parses[key]
+                if not pending.task.done():
+                    pending.task.cancel()
+
+    async def _async_fetch_parse(
+        self, params: dict[str, str], state: _HostRequests, key: _ParseKey
+    ) -> dict[str, Any]:
         await self._async_wait_for_parse_slot()
-        async with self._session.get(
-            self._base_url,
-            params=params,
-            headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
-        ) as response:
-            response.raise_for_status()
-            payload = await response.json()
-        if error := payload.get("error"):
-            raise ValueError(error.get("info", "Liquipedia could not parse the page"))
+        payload = await self._async_request(params, rate_limited=True)
         try:
             if not isinstance(payload["parse"]["text"]["*"], str):
                 raise ValueError("Liquipedia returned an unexpected API response")
         except (KeyError, TypeError) as error:
             raise ValueError("Liquipedia returned an unexpected API response") from error
+
+        expires_at = asyncio.get_running_loop().time() + _PARSE_CACHE_SECONDS
+        state.cache[key] = (expires_at, payload)
+        if len(state.cache) > _PARSE_CACHE_SIZE:
+            state.cache.popitem(last=False)
         return payload
 
-    async def _async_wait_for_parse_slot(self) -> None:
-        """Respect Liquipedia's one action=parse request per 30-second limit."""
-        lock = self._parse_locks.setdefault(self._base_url, asyncio.Lock())
-        async with lock:
-            loop = asyncio.get_running_loop()
-            delay = (
-                self._last_parse_requests.get(self._base_url, 0)
-                + _PARSE_REQUEST_INTERVAL_SECONDS
-                - loop.time()
+    async def _async_request(
+        self, params: dict[str, str], *, rate_limited: bool = False
+    ) -> dict[str, Any]:
+        if not rate_limited:
+            await self._async_wait_for_request_slot()
+        if self._session is None:
+            self._session = aiohttp.ClientSession(
+                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
+                timeout=aiohttp.ClientTimeout(total=30),
             )
+        async with self._session.get(
+            self._base_url,
+            params=params,
+            headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as response:
+            response.raise_for_status()
+            payload = await response.json()
+        if not isinstance(payload, dict):
+            raise ValueError("Liquipedia returned an unexpected API response")
+        if error := payload.get("error"):
+            if isinstance(error, dict) and isinstance(info := error.get("info"), str):
+                raise ValueError(info)
+            raise ValueError("Liquipedia reported an API error")
+        return payload
+
+    def _host_requests(self) -> _HostRequests:
+        hosts = self._requests_by_loop.setdefault(asyncio.get_running_loop(), {})
+        if self._host not in hosts:
+            hosts[self._host] = _HostRequests()
+        return hosts[self._host]
+
+    async def _async_wait_for_request_slot(self) -> None:
+        """Space all requests to Liquipedia, including requests across wikis."""
+        state = self._host_requests()
+        loop = asyncio.get_running_loop()
+        async with state.request_lock:
+            delay = state.next_request - loop.time()
             if delay > 0:
                 await asyncio.sleep(delay)
-            self._last_parse_requests[self._base_url] = loop.time()
+            state.next_request = loop.time() + _REQUEST_INTERVAL_SECONDS
+
+    async def _async_wait_for_parse_slot(self) -> None:
+        """Respect the host-wide parse cooldown without waiting an unbounded queue."""
+        state = self._host_requests()
+        loop = asyncio.get_running_loop()
+        try:
+            async with asyncio.timeout(_MAX_PARSE_WAIT_SECONDS):
+                async with state.parse_lock:
+                    delay = state.next_parse - loop.time()
+                    if delay > 0:
+                        await asyncio.sleep(delay)
+                    await self._async_wait_for_request_slot()
+                    state.next_parse = loop.time() + _PARSE_REQUEST_INTERVAL_SECONDS
+        except TimeoutError as error:
+            raise TimeoutError("Liquipedia's parse request queue is busy") from error

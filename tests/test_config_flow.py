@@ -1,9 +1,13 @@
-"""Tests for game-dependent tournament setup."""
+"""Tests for Liquipedia setup and options."""
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
 
+from homeassistant import config_entries
+
+from custom_components.liquipedia.api import TeamNotFoundError
 from custom_components.liquipedia.config_flow import ConfigFlow
 
 
@@ -15,21 +19,42 @@ def _flow():
     return flow
 
 
+def _options_flow(data, options=None):
+    entry = SimpleNamespace(data=data, options=options or {})
+    flow = ConfigFlow.async_get_options_flow(entry)
+    flow.hass = MagicMock()
+    flow.handler = "entry-id"
+    flow.hass.config_entries.async_get_known_entry.return_value = entry
+    return flow
+
+
+def _field(schema, field):
+    return next(marker for marker in schema.schema if marker.schema == field)
+
+
 @pytest.mark.asyncio
 async def test_game_then_tournament_stores_resolved_schedule():
     flow = _flow()
     api = MagicMock()
     api.get_tournaments = AsyncMock(return_value={"Cup/2026": "Cup (Upcoming)"})
     api.get_schedule_page = AsyncMock(return_value="Cup/2026/Match Schedule")
+    result = await flow.async_step_user({"mode": "tournament"})
+    assert result["step_id"] == "tournament_game"
+    api.get_tournaments.assert_not_called()
     with patch("custom_components.liquipedia.config_flow.async_get_clientsession"), patch(
         "custom_components.liquipedia.config_flow.LiquipediaAPI", return_value=api
     ) as client:
-        result = await flow.async_step_user({"name": "My cup", "game": "valorant"})
+        result = await flow.async_step_tournament_game(
+            {"name": "My cup", "game": "valorant"}
+        )
     assert result["step_id"] == "tournament"
     assert client.call_args.args[0] == "valorant"
     result = await flow.async_step_tournament({"tournament": "Cup/2026"})
     assert result["data"] == {
-        "name": "My cup", "game": "valorant", "tournament": "Cup/2026/Match Schedule"
+        "mode": "tournament",
+        "name": "My cup",
+        "game": "valorant",
+        "tournament": "Cup/2026/Match Schedule",
     }
     flow.async_set_unique_id.assert_awaited_once_with("valorant_Cup/2026/Match Schedule")
     flow._abort_if_unique_id_configured.assert_called_once()
@@ -44,12 +69,17 @@ async def test_empty_or_failed_discovery_keeps_manual_setup(failure):
     with patch("custom_components.liquipedia.config_flow.async_get_clientsession"), patch(
         "custom_components.liquipedia.config_flow.LiquipediaAPI", return_value=api
     ):
-        result = await flow.async_step_user({"name": "Cup", "game": "dota2"})
+        result = await flow.async_step_tournament_game(
+            {"name": "Cup", "game": "dota2", "team_filter": " Team Liquid "}
+        )
     assert result["errors"]["base"] == ("cannot_connect" if failure else "no_tournaments")
     result = await flow.async_step_tournament({"tournament": "manual-entry"})
     assert result["step_id"] == "manual"
+    result = await flow.async_step_manual({"tournament": "  "})
+    assert result["errors"] == {"tournament": "invalid_schedule"}
     result = await flow.async_step_manual({"tournament": " Cup/Match Schedule "})
     assert result["data"]["tournament"] == "Cup/Match Schedule"
+    assert result["data"]["team_filter"] == "Team Liquid"
 
 
 @pytest.mark.asyncio
@@ -76,5 +106,157 @@ async def test_french_labels_and_manual_option_are_available():
     assert select.config["options"] == [
         {"value": "Cup", "label": "Cup (À venir) — Oct 3"},
         {"value": "League", "label": "League (En cours)"},
-        {"value": "manual-entry", "label": "manual"},
+        {"value": "manual-entry", "label": "Enter a schedule manually"},
     ]
+
+
+@pytest.mark.asyncio
+async def test_team_name_then_games_and_per_game_confirmation():
+    flow = _flow()
+    lol = SimpleNamespace(
+        search_teams=AsyncMock(return_value=["Team Liquid", "Team Liquid Academy"])
+    )
+    cs = SimpleNamespace(search_teams=AsyncMock(return_value=["Team Liquid"]))
+    apis = {"leagueoflegends": lol, "counterstrike": cs}
+
+    result = await flow.async_step_user()
+    mode_field = _field(result["data_schema"], "mode")
+    assert result["data_schema"].schema[mode_field].config["options"] == [
+        "team", "tournament"
+    ]
+    result = await flow.async_step_user({"mode": "team"})
+    assert result["step_id"] == "team_name"
+    result = await flow.async_step_team_name({"team_name": "   "})
+    assert result["errors"] == {"team_name": "invalid_team_name"}
+    result = await flow.async_step_team_name({"team_name": " Team  Liquid "})
+    assert result["step_id"] == "team_games"
+    games_field = _field(result["data_schema"], "games")
+    games_selector = result["data_schema"].schema[games_field]
+    assert games_selector.config["multiple"] is True
+    assert [game["value"] for game in games_selector.config["options"]] == list(apis)
+    for games in ([], ["valorant"]):
+        result = await flow.async_step_team_games({"games": games})
+        assert result["errors"] == {"games": "invalid_team_games"}
+    for api in apis.values():
+        api.search_teams.assert_not_called()
+
+    with patch.object(flow, "_api_for_game", side_effect=apis.__getitem__):
+        result = await flow.async_step_team_games({"games": list(apis)})
+        assert result["step_id"] == "team_page"
+        assert result["last_step"] is False
+        assert result["description_placeholders"] == {
+            "team_name": "Team Liquid", "game": "League of Legends"
+        }
+        match_field = _field(result["data_schema"], "team_match")
+        assert match_field.description is None
+        result = await flow.async_step_team_page({"team_match": "Unknown Team"})
+        assert result["errors"] == {"team_match": "invalid_team_page"}
+        result = await flow.async_step_team_page({"team_match": "Team Liquid Academy"})
+        assert result["description_placeholders"]["game"] == "Counter-Strike"
+        assert result["last_step"] is True
+        match_field = _field(result["data_schema"], "team_match")
+        assert match_field.description == {"suggested_value": "Team Liquid"}
+        result = await flow.async_step_team_page({"team_match": "Team Liquid"})
+
+    for api in apis.values():
+        api.search_teams.assert_awaited_once_with("Team Liquid")
+    assert result["title"] == "Team Liquid"
+    assert result["data"] == {
+        "mode": "team",
+        "team_name": "Team Liquid",
+        "team_pages": {
+            "leagueoflegends": "Team Liquid Academy", "counterstrike": "Team Liquid"
+        },
+    }
+    flow.async_set_unique_id.assert_awaited_once_with("team_team liquid")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("discovery_failure", [None, aiohttp.ClientError()])
+async def test_team_manual_page_resolves_redirect_and_recovers_from_error(discovery_failure):
+    flow = _flow()
+    api = SimpleNamespace(
+        search_teams=AsyncMock(return_value=[], side_effect=discovery_failure),
+        resolve_team=AsyncMock(
+            side_effect=[TeamNotFoundError(), ValueError(), aiohttp.ClientError(), "Canonical Team"]
+        ),
+    )
+    await flow.async_step_team_name({"team_name": "Different name"})
+    with patch.object(flow, "_api_for_game", return_value=api):
+        result = await flow.async_step_team_games({"games": ["counterstrike"]})
+        assert result["errors"] == (
+            {"base": "cannot_search_team"} if discovery_failure else {}
+        )
+        assert set(result["data_schema"].schema) == {"team_page"}
+        result = await flow.async_step_team_page({"team_page": "Wrong page"})
+        assert result["errors"] == {"team_page": "invalid_team_page"}
+        result = await flow.async_step_team_page({"team_page": "Alias"})
+        assert result["errors"] == {"base": "cannot_connect_team"}
+        result = await flow.async_step_team_page({"team_page": "Alias"})
+        assert result["errors"] == {"base": "cannot_connect_team"}
+        result = await flow.async_step_team_page({"team_page": " Alias "})
+
+    api.resolve_team.assert_awaited_with("Alias")
+    assert result["data"]["team_pages"] == {"counterstrike": "Canonical Team"}
+
+
+@pytest.mark.asyncio
+async def test_team_options_replace_games_and_use_effective_existing_page():
+    flow = _options_flow(
+        {
+            "mode": "team",
+            "team_name": "Team Liquid",
+            "team_pages": {"leagueoflegends": "Original name", "counterstrike": "Team Liquid"},
+        },
+        {"team_pages": {"leagueoflegends": "Team Liquid"}},
+    )
+    assert isinstance(flow, config_entries.OptionsFlowWithReload)
+    result = await flow.async_step_init()
+    games_field = _field(result["data_schema"], "games")
+    assert games_field.description == {"suggested_value": ["leagueoflegends"]}
+    api = SimpleNamespace(
+        search_teams=AsyncMock(return_value=["Team Liquid"]),
+        resolve_team=AsyncMock(return_value="Team Liquid (organization)"),
+    )
+    with patch.object(flow, "_api_for_game", return_value=api) as client:
+        result = await flow.async_step_team_games({"games": ["leagueoflegends", "counterstrike"]})
+        client.assert_not_called()
+        match_field = _field(result["data_schema"], "team_match")
+        assert match_field.description == {"suggested_value": "Team Liquid"}
+        result = await flow.async_step_team_page(
+            {"team_match": "Team Liquid", "team_page": "New page"}
+        )
+        assert result["description_placeholders"]["game"] == "Counter-Strike"
+        assert client.call_args.args == ("counterstrike",)
+        result = await flow.async_step_team_page({"team_match": "Team Liquid"})
+
+    assert result["data"] == {
+        "team_pages": {
+            "leagueoflegends": "Team Liquid (organization)", "counterstrike": "Team Liquid"
+        },
+    }
+    api.resolve_team.assert_awaited_once_with("New page")
+    api.search_teams.assert_awaited_once_with("Team Liquid")
+
+    result = await flow.async_step_team_games({"games": ["leagueoflegends"]})
+    result = await flow.async_step_team_page({"team_match": "Team Liquid"})
+    assert result["data"] == {"team_pages": {"leagueoflegends": "Team Liquid"}}
+
+
+@pytest.mark.asyncio
+async def test_legacy_tournament_options_add_and_clear_filter():
+    legacy = {"game": "dota2", "tournament": "Cup/Match Schedule", "name": "Cup"}
+    flow = _options_flow(legacy)
+    result = await flow.async_step_init()
+    assert result["step_id"] == "init"
+    result = await flow.async_step_init({})
+    assert result["data"] == {}
+    result = await flow.async_step_init({"team_filter": " Team Liquid "})
+    assert result["data"] == {"team_filter": "Team Liquid"}
+
+    flow = _options_flow({**legacy, "mode": "tournament", "team_filter": "Team Liquid"})
+    result = await flow.async_step_init()
+    filter_field = _field(result["data_schema"], "team_filter")
+    assert filter_field.description == {"suggested_value": "Team Liquid"}
+    result = await flow.async_step_init({})
+    assert result["data"] == {"team_filter": ""}

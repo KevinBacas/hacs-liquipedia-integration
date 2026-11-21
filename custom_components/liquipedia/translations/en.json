@@ -3,10 +3,43 @@
     "step": {
       "user": {
         "title": "Configure Liquipedia",
+        "description": "Choose what you want to follow.",
+        "data": {
+          "mode": "Follow"
+        }
+      },
+      "team_name": {
+        "title": "Enter an organization",
+        "description": "Enter the name of the esports organization you want to follow.",
+        "data": {
+          "team_name": "Organization name"
+        }
+      },
+      "team_games": {
+        "title": "Choose games",
+        "description": "Select one or more games to follow for {team_name}.",
+        "data": {
+          "games": "Games"
+        }
+      },
+      "team_page": {
+        "title": "Confirm the team in {game}",
+        "description": "Confirm the Liquipedia team page for {team_name}. To use a different page, enter its title.",
+        "data": {
+          "team_match": "Suggested team page",
+          "team_page": "Team page title"
+        }
+      },
+      "tournament_game": {
+        "title": "Choose the tournament game",
         "description": "Choose a game to load its ongoing tournaments and those starting in the next 30 days.",
         "data": {
           "name": "Name",
-          "game": "Game"
+          "game": "Game",
+          "team_filter": "Team to follow (optional)"
+        },
+        "data_description": {
+          "team_filter": "Show only matches involving this team."
         }
       },
       "tournament": {
@@ -18,24 +51,69 @@
       },
       "manual": {
         "title": "Enter a match schedule",
-        "description": "Enter the Match Schedule page title from Liquipedia, for example: First Stand Tournament/2026/Match Schedule.",
+        "description": "Enter the Liquipedia Match Schedule page title, such as First Stand Tournament/2026/Match Schedule.",
         "data": {
           "tournament": "Match Schedule page"
         }
       }
     },
     "error": {
+      "invalid_mode": "Select what you want to follow.",
+      "invalid_team_name": "Enter an organization name.",
+      "invalid_team_games": "Select at least one supported game.",
+      "invalid_team_page": "Choose a suggested team or enter a valid Liquipedia team page title.",
+      "cannot_search_team": "Unable to search Liquipedia. You can enter a team page title manually.",
+      "cannot_connect_team": "Unable to check the Liquipedia team page. Try again.",
       "invalid_game": "Select a supported game.",
       "invalid_tournament": "Select a tournament from the list.",
+      "invalid_schedule": "Enter a Match Schedule page title.",
       "cannot_connect": "Unable to load Liquipedia data. Try again or choose manual entry.",
       "no_tournaments": "No tournaments were found in this period. You can enter a schedule manually.",
       "no_schedule": "No supported match schedule was found. Choose another tournament or enter its schedule manually."
     },
     "abort": {
-      "already_configured": "This game and tournament are already configured."
+      "already_configured": "You already follow this organization or tournament."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Filter tournament matches",
+        "description": "Enter a team name to show only its matches. Leave it blank to follow all matches.",
+        "data": {
+          "team_filter": "Team to follow (optional)"
+        }
+      },
+      "team_games": {
+        "title": "Choose games",
+        "description": "Select one or more games to follow for {team_name}.",
+        "data": {
+          "games": "Games"
+        }
+      },
+      "team_page": {
+        "title": "Confirm the team in {game}",
+        "description": "Confirm the Liquipedia team page for {team_name}. To use a different page, enter its title.",
+        "data": {
+          "team_match": "Suggested team page",
+          "team_page": "Team page title"
+        }
+      }
+    },
+    "error": {
+      "invalid_team_games": "Select at least one supported game.",
+      "invalid_team_page": "Choose a suggested team or enter a valid Liquipedia team page title.",
+      "cannot_search_team": "Unable to search Liquipedia. You can enter a team page title manually.",
+      "cannot_connect_team": "Unable to check the Liquipedia team page. Try again."
     }
   },
   "selector": {
+    "mode": {
+      "options": {
+        "team": "Follow a team",
+        "tournament": "Follow a tournament"
+      }
+    },
     "tournament": {
       "options": {
         "manual-entry": "Enter a schedule manually"
