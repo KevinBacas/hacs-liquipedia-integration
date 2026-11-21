@@ -32,6 +32,8 @@ SUPPORTED_GAMES = [
 TEAM_GAMES = {
     "leagueoflegends": "League of Legends",
     "counterstrike": "Counter-Strike",
+    "rocketleague": "Rocket League",
+    "valorant": "Valorant",
 }
 
 # API endpoints

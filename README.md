@@ -5,7 +5,7 @@ on Liquipedia.
 
 ## Features
 
-- Follow a team across League of Legends and Counter-Strike and find its matches automatically
+- Find a team's matches automatically across League of Legends, Counter-Strike, Rocket League, and Valorant
 - Follow an ongoing tournament or one starting in the next 30 days, with an optional team filter
 - Keep manual Match Schedule page entry available for unlisted tournaments
 - Create one timestamp sensor for the next scheduled match
@@ -36,7 +36,7 @@ on Liquipedia.
 Go to **Settings → Devices & services → Add integration**, search for
 **Liquipedia Integration**, and choose a tracking mode.
 
-- **Follow a team.** Enter the team name and select one or both supported games.
+- **Follow a team.** Enter the team name and select one or more supported games.
   Confirm which Liquipedia team page to follow in each game. Open the entry's
   configuration to change the games or pages later.
 - **Follow a tournament.** Choose a game and select an ongoing or upcoming

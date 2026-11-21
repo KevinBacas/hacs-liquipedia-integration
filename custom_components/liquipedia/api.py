@@ -17,7 +17,8 @@ from .team_parser import BEST_OF_PATTERN, TeamPageParser, normalize_title
 
 _PARSE_REQUEST_INTERVAL_SECONDS = 30
 _REQUEST_INTERVAL_SECONDS = 2
-_MAX_PARSE_WAIT_SECONDS = 125
+# Allow a cooldown already in progress, four team pages and one tournament.
+_MAX_PARSE_WAIT_SECONDS = 155
 _PARSE_CACHE_SECONDS = 120
 _PARSE_CACHE_SIZE = 32
 _TEAM_INFOBOX = "Template:Infobox team"

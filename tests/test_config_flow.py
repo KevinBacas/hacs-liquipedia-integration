@@ -117,7 +117,14 @@ async def test_team_name_then_games_and_per_game_confirmation():
         search_teams=AsyncMock(return_value=["Team Liquid", "Team Liquid Academy"])
     )
     cs = SimpleNamespace(search_teams=AsyncMock(return_value=["Team Liquid"]))
-    apis = {"leagueoflegends": lol, "counterstrike": cs}
+    rocket_league = SimpleNamespace(search_teams=AsyncMock(return_value=["Team Liquid Rocket League"]))
+    valorant = SimpleNamespace(search_teams=AsyncMock(return_value=["Team Liquid Valorant"]))
+    apis = {
+        "leagueoflegends": lol,
+        "counterstrike": cs,
+        "rocketleague": rocket_league,
+        "valorant": valorant,
+    }
 
     result = await flow.async_step_user()
     mode_field = _field(result["data_schema"], "mode")
@@ -134,7 +141,7 @@ async def test_team_name_then_games_and_per_game_confirmation():
     games_selector = result["data_schema"].schema[games_field]
     assert games_selector.config["multiple"] is True
     assert [game["value"] for game in games_selector.config["options"]] == list(apis)
-    for games in ([], ["valorant"]):
+    for games in ([], ["dota2"]):
         result = await flow.async_step_team_games({"games": games})
         assert result["errors"] == {"games": "invalid_team_games"}
     for api in apis.values():
@@ -153,10 +160,15 @@ async def test_team_name_then_games_and_per_game_confirmation():
         assert result["errors"] == {"team_match": "invalid_team_page"}
         result = await flow.async_step_team_page({"team_match": "Team Liquid Academy"})
         assert result["description_placeholders"]["game"] == "Counter-Strike"
-        assert result["last_step"] is True
         match_field = _field(result["data_schema"], "team_match")
         assert match_field.description == {"suggested_value": "Team Liquid"}
         result = await flow.async_step_team_page({"team_match": "Team Liquid"})
+        assert result["description_placeholders"]["game"] == "Rocket League"
+        assert result["last_step"] is False
+        result = await flow.async_step_team_page({"team_match": "Team Liquid Rocket League"})
+        assert result["description_placeholders"]["game"] == "Valorant"
+        assert result["last_step"] is True
+        result = await flow.async_step_team_page({"team_match": "Team Liquid Valorant"})
 
     for api in apis.values():
         api.search_teams.assert_awaited_once_with("Team Liquid")
@@ -165,7 +177,10 @@ async def test_team_name_then_games_and_per_game_confirmation():
         "mode": "team",
         "team_name": "Team Liquid",
         "team_pages": {
-            "leagueoflegends": "Team Liquid Academy", "counterstrike": "Team Liquid"
+            "leagueoflegends": "Team Liquid Academy",
+            "counterstrike": "Team Liquid",
+            "rocketleague": "Team Liquid Rocket League",
+            "valorant": "Team Liquid Valorant",
         },
     }
     flow.async_set_unique_id.assert_awaited_once_with("team_team liquid")

@@ -205,10 +205,11 @@ async def test_cancelling_one_waiter_keeps_shared_fetch_alive() -> None:
 
 
 @pytest.mark.asyncio
-async def test_rate_budget_is_shared_by_three_cold_parses_and_a_query(monkeypatch) -> None:
+async def test_rate_budget_is_shared_across_four_team_games_and_a_tournament(monkeypatch) -> None:
+    assert api_module._MAX_PARSE_WAIT_SECONDS > 5 * api_module._PARSE_REQUEST_INTERVAL_SECONDS
     monkeypatch.setattr(api_module, "_REQUEST_INTERVAL_SECONDS", 0.01)
     monkeypatch.setattr(api_module, "_PARSE_REQUEST_INTERVAL_SECONDS", 0.04)
-    monkeypatch.setattr(api_module, "_MAX_PARSE_WAIT_SECONDS", 0.2)
+    monkeypatch.setattr(api_module, "_MAX_PARSE_WAIT_SECONDS", 0.25)
     session = _mock_session(AsyncMock(return_value={
         "parse": {"text": {"*": ""}}, "batchcomplete": True,
     }))
@@ -221,15 +222,22 @@ async def test_rate_budget_is_shared_by_three_cold_parses_and_a_query(monkeypatc
     session.get.side_effect = start_request
     cs = LiquipediaAPI("counterstrike", session)
     lol = LiquipediaAPI("leagueoflegends", session)
-    tournament = LiquipediaAPI("valorant", session)
+    rocket_league = LiquipediaAPI("rocketleague", session)
+    valorant = LiquipediaAPI("valorant", session)
+    # An earlier request has already started the shared parse cooldown.
+    assert await cs.get_matches("Previous schedule") == []
     assert await asyncio.gather(
-        cs.get_matches("First"), lol.search_teams("T1"),
-        lol.get_matches("Second"), tournament.get_matches("Third"),
-    ) == [[], [], [], []]
+        cs.get_matches("CS team"),
+        lol.search_teams("T1"),
+        lol.get_matches("LoL team"),
+        rocket_league.get_matches("Rocket League team"),
+        valorant.get_matches("Valorant team"),
+        valorant.get_matches("Tournament"),
+    ) == [[], [], [], [], [], []]
 
     parse_starts = [started for _, action, started in http_starts if action == "parse"]
-    assert len(parse_starts) == 3
-    assert len({url for url, _, _ in http_starts}) == 3
+    assert len(parse_starts) == 6
+    assert len({url for url, _, _ in http_starts}) == 4
     assert all(next_start - previous >= 0.039 for previous, next_start in zip(
         parse_starts, parse_starts[1:]
     ))
