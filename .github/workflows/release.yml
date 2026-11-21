@@ -4,7 +4,9 @@ name: Validate and release
 # Its version is selected explicitly with one of the bump labels documented in
 # the README: bump:major, bump:minor, or bump:patch.
 on:
-  pull_request:
+  # Run from the trusted base workflow, including after a fork PR merges.
+  # Both jobs check out commits from main only.
+  pull_request_target:
     branches: [main]
     types: [closed]
 
@@ -15,7 +17,7 @@ concurrency:
   queue: max
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   validate:
@@ -26,11 +28,34 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'bump:minor') ||
       contains(github.event.pull_request.labels.*.name, 'bump:patch'))
     runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.snapshot.outputs.commit }}
     steps:
-      - name: Check out main
+      - name: Check out the merged PR commit
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+
+      - name: Record the validated commit
+        id: snapshot
+        run: echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-test.txt
+
+      - name: Run Ruff
+        run: python -m ruff check custom_components tests
+
+      - name: Run pytest
+        run: python -m pytest -q
 
       - name: Run hassfest
         uses: home-assistant/actions/hassfest@master
@@ -44,11 +69,13 @@ jobs:
     name: Create stable release
     needs: validate
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Check out main and tags
+      - name: Check out the validated main commit and tags
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ needs.validate.outputs.commit }}
           fetch-depth: 0
 
       - name: Determine version bump
@@ -75,12 +102,31 @@ jobs:
         env:
           BUMP_TYPE: ${{ steps.bump.outputs.type }}
         run: |
+          # Recover a tag pushed by this run if release publication failed.
+          existing_tag=$(git tag --list 'v*' \
+            --format='%(refname:short) %(contents:subject)' | \
+            awk -v run="$GITHUB_RUN_ID" '$0 == $1 " Release " $1 " (run " run ")" {print $1}')
+          if [ -n "$existing_tag" ]; then
+            if [ "$(git rev-parse "$existing_tag^")" != "$(git rev-parse HEAD)" ] ||
+              [ "$(git show "$existing_tag:custom_components/liquipedia/manifest.json" | jq -er .version)" != "${existing_tag#v}" ]; then
+              echo "Existing stable tag does not match this run." >&2
+              exit 1
+            fi
+            echo "tag=$existing_tag" >> "$GITHUB_OUTPUT"
+            echo "already_tagged=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           # The latest stable tag is the source of truth. This prevents a
           # stale manifest version from producing a release older than a tag.
           current_tag=$(git tag -l 'v*' --sort=-version:refname | \
             grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
 
           if [ -n "$current_tag" ]; then
+            if git merge-base --is-ancestor HEAD "$current_tag"; then
+              echo "The latest stable tag already includes this merge." >&2
+              exit 1
+            fi
             current="${current_tag#v}"
           else
             current=$(jq -er '.version' custom_components/liquipedia/manifest.json)
@@ -98,23 +144,46 @@ jobs:
           echo "tag=v$next" >> "$GITHUB_OUTPUT"
 
       - name: Update manifest, tag, and push
+        if: steps.version.outputs.already_tagged != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
-          jq --arg version "$VERSION" '.version = $version' \
-            custom_components/liquipedia/manifest.json > /tmp/manifest.json
-          mv /tmp/manifest.json custom_components/liquipedia/manifest.json
+          update_manifest() {
+            jq --arg version "$VERSION" '.version = $version' \
+              custom_components/liquipedia/manifest.json > "$RUNNER_TEMP/manifest.json"
+            mv "$RUNNER_TEMP/manifest.json" custom_components/liquipedia/manifest.json
+            git add custom_components/liquipedia/manifest.json
+          }
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add custom_components/liquipedia/manifest.json
+          validated=$(git rev-parse HEAD)
+          main=$(git rev-parse origin/main)
+          git merge-base --is-ancestor "$validated" "$main"
+
+          update_manifest
           git commit -m "chore(release): $TAG"
-          git tag -a "$TAG" -m "Release $TAG"
-          git push origin HEAD:main --follow-tags
+          git tag -a "$TAG" -m "Release $TAG (run $GITHUB_RUN_ID)"
+
+          # Later merges belong to main but outside this release's source tree.
+          if [ "$main" != "$validated" ]; then
+            git checkout --detach "$main"
+            update_manifest
+            if ! git diff --cached --quiet; then
+              git commit -m "chore(release): sync manifest to $TAG"
+            fi
+          fi
+
+          # If main moved again, neither ref is updated.
+          git push --atomic origin HEAD:refs/heads/main "refs/tags/$TAG"
 
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
-        run: gh release create "$TAG" --title "$TAG" --generate-notes
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            exit 0
+          fi
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes

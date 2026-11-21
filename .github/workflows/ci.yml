@@ -2,11 +2,11 @@ name: CI & Release Candidate
 
 # Triggered on every PR update and when labels are added/removed.
 # Two jobs:
-#   1. validate  – always runs: hassfest + HACS validation.
+#   1. validate  – always runs: Ruff, pytest, hassfest, and HACS validation.
 #   2. release-candidate – runs only when a bump label is present on the PR
 #      (bump:patch, bump:minor, or bump:major) and validate passes.
-#      It bumps the version in manifest.json on a detached commit, force-pushes
-#      an RC tag (e.g. v0.3.0-rc.42), then creates/updates a GitHub pre-release.
+#      It bumps manifest.json on top of the validated merge commit, tags that
+#      commit with the workflow run number, and publishes the pre-release.
 
 on:
   pull_request:
@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Job 1: Validate the integration with hassfest and HACS tooling.
+  # Job 1: Run lint, tests, hassfest, and HACS validation.
   # ---------------------------------------------------------------------------
   validate:
     name: Validate
@@ -33,6 +33,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements-test.txt
+
+      - name: Run Ruff
+        run: python -m ruff check custom_components tests
+
+      - name: Run pytest
+        run: python -m pytest -q
 
       - name: Run hassfest
         uses: home-assistant/actions/hassfest@master
@@ -56,16 +75,16 @@ jobs:
     permissions:
       contents: write
     if: |
-      contains(github.event.pull_request.labels.*.name, 'bump:major') ||
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      (contains(github.event.pull_request.labels.*.name, 'bump:major') ||
       contains(github.event.pull_request.labels.*.name, 'bump:minor') ||
-      contains(github.event.pull_request.labels.*.name, 'bump:patch')
+      contains(github.event.pull_request.labels.*.name, 'bump:patch'))
     steps:
-      - name: Checkout PR head (detached)
+      - name: Check out the validated PR merge commit
         uses: actions/checkout@v4
         with:
-          # Check out the exact PR HEAD SHA so that any commit we create stays
-          # detached (it won't be pushed to the PR branch, only the tag will).
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       # Require an unambiguous release decision.
@@ -93,7 +112,22 @@ jobs:
       # stable release commit.
       - name: Compute next version
         id: version
+        env:
+          BUMP_TYPE: ${{ steps.bump.outputs.type }}
         run: |
+          existing_tag=$(git tag --list "v*-rc.${GITHUB_RUN_NUMBER}")
+          if [ -n "$existing_tag" ]; then
+            if [ "$(git rev-parse "$existing_tag^")" != "$GITHUB_SHA" ] ||
+              [ "$(git show "$existing_tag:custom_components/liquipedia/manifest.json" | jq -er .version)" != "${existing_tag#v}" ]; then
+              echo "Existing candidate tag does not match this run." >&2
+              exit 1
+            fi
+            echo "tag=$existing_tag" >> "$GITHUB_OUTPUT"
+            echo "version=${existing_tag#v}" >> "$GITHUB_OUTPUT"
+            echo "already_tagged=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           current_tag=$(git tag -l 'v*' --sort=-version:refname | \
             grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 1 || true)
 
@@ -104,54 +138,46 @@ jobs:
           fi
 
           IFS='.' read -r major minor patch <<< "$current"
-          case "${{ steps.bump.outputs.type }}" in
+          case "$BUMP_TYPE" in
             major) new="$((major + 1)).0.0" ;;
             minor) new="${major}.$((minor + 1)).0" ;;
-            *)     new="${major}.${minor}.$((patch + 1))" ;;
+            patch) new="${major}.${minor}.$((patch + 1))" ;;
+            *) echo "Unknown bump type: $BUMP_TYPE" >&2; exit 1 ;;
           esac
-          pr="${{ github.event.pull_request.number }}"
-          echo "version=${new}" >> "$GITHUB_OUTPUT"
-          echo "tag=v${new}-rc.${pr}" >> "$GITHUB_OUTPUT"
+          version="${new}-rc.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
 
-      # Bump the version in manifest.json, commit on the detached HEAD, then
-      # force-push only the tag (the PR branch is NOT modified).
       - name: Bump manifest.json and create RC tag
+        if: steps.version.outputs.already_tagged != 'true'
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="${{ steps.version.outputs.tag }}"
-
-          jq --arg v "$version" '.version = $v' \
-            custom_components/liquipedia/manifest.json > /tmp/manifest.json
-          mv /tmp/manifest.json custom_components/liquipedia/manifest.json
+          jq --arg v "$VERSION" '.version = $v' \
+            custom_components/liquipedia/manifest.json > "$RUNNER_TEMP/manifest.json"
+          mv "$RUNNER_TEMP/manifest.json" custom_components/liquipedia/manifest.json
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add custom_components/liquipedia/manifest.json
 
-          # Only commit if manifest actually changed (avoids empty commits).
-          if ! git diff --cached --quiet; then
-            git commit -m "chore: bump version to ${version}"
+          git commit -m "chore: bump version to $VERSION"
+          git tag "$TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Publish GitHub pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            exit 0
           fi
 
-          git tag -f "$tag"
-          git push origin "$tag" --force
-
-      # Create or replace the GitHub pre-release that points to the RC tag.
-      - name: Create or update GitHub pre-release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          version="${{ steps.version.outputs.version }}"
-          pr="${{ github.event.pull_request.number }}"
-          title="${{ github.event.pull_request.title }}"
-
-          # Delete the existing pre-release for this tag if it already exists,
-          # so we always have a fresh one pointing to the latest commit.
-          gh release delete "$tag" --yes 2>/dev/null || true
-
-          gh release create "$tag" \
-            --title "v${version} – Release Candidate (PR #${pr})" \
-            --notes "$(printf '## Release Candidate for v%s\n\nPR #%s: %s\n\nThis pre-release was created automatically by CI.\nIt will be promoted to a stable release once the PR is merged.' \
-              "$version" "$pr" "$title")" \
+          gh release create "$TAG" --verify-tag \
+            --title "$TAG – Release Candidate (PR #$PR_NUMBER)" \
+            --notes "$(printf 'Preview for PR #%s: %s\n' "$PR_NUMBER" "$PR_TITLE")" \
             --prerelease
