@@ -1,11 +1,12 @@
 # HACS Liquipedia Integration
 
-A Home Assistant custom integration that exposes the next upcoming esports match
-from Liquipedia.
+A Home Assistant custom integration that tracks an esports team or a tournament
+on Liquipedia.
 
 ## Features
 
-- Choose a game, then select an ongoing tournament or one starting in the next 30 days
+- Find a team's matches automatically across League of Legends, Counter-Strike, Rocket League, and Valorant
+- Follow an ongoing tournament or one starting in the next 30 days, with an optional team filter
 - Keep manual Match Schedule page entry available for unlisted tournaments
 - Create one timestamp sensor for the next scheduled match
 - Create a match-running binary sensor when Liquipedia explicitly marks a match live
@@ -32,20 +33,33 @@ from Liquipedia.
 
 ## Configuration
 
-1. Go to Configuration → Integrations
-2. Click the "+" button
-3. Search for "Liquipedia Integration"
-4. Enter a name and choose a game, then continue to load the tournament list
-5. Select an ongoing tournament or one starting in the next 30 days
-6. If the list is unavailable, empty, or your tournament is missing, choose manual entry
+Go to **Settings → Devices & services → Add integration**, search for
+**Liquipedia Integration**, and choose a tracking mode.
+
+- **Follow a team.** Enter the team name and select one or more supported games.
+  Confirm which Liquipedia team page to follow in each game. Open the entry's
+  configuration to change the games or pages later.
+- **Follow a tournament.** Choose a game and select an ongoing or upcoming
+  tournament, or enter its schedule page manually. The team filter is optional.
+  Enter the team's Liquipedia page title as it appears in the results (for
+  example, `Team Liquid`). You can change or clear the filter in the entry's
+  configuration. Existing tournament entries keep their entities on upgrade.
 
 ## Usage
 
 Once configured, the integration provides a timestamp sensor whose state is the
 scheduled start time of the next match. It also provides a match-running binary
-sensor. That entity is on only when Liquipedia explicitly identifies a match as
-live; it is off when no live match is reported. Match details are exposed as
-attributes including `title`, `team1`, `team2`, `tournament`, and `best_of`.
+sensor. That entity switches on when the source explicitly marks a tracked
+match as live. Match details are exposed as attributes including `title`,
+`team1`, `team2`, `tournament`, and `best_of`.
+
+Team tracking uses each selected team's upcoming and ongoing match list. The
+next match is the earliest one reported across the selected games. It includes
+the game and opponent in its attributes. Liquipedia caches team pages, so their
+matches and live indicators can lag behind the main ticker. When a game fails
+to refresh, the `unavailable_games` attribute lists it. A confirmed live match still shows
+as on. If the remaining games report no live match, the live sensor state is
+unknown while the data is incomplete.
 
 The list comes from the selected wiki’s tournament ticker, using a rolling
 30-day window. Finished tournaments are excluded. Selecting a tournament uses
@@ -57,13 +71,13 @@ For manual entry, enter the title of the tournament's Match Schedule page, exact
 after the game name in its Liquipedia URL. For example, this URL:
 `https://liquipedia.net/leagueoflegends/First_Stand_Tournament/2026/Match_Schedule`
 uses the page title `First Stand Tournament/2026/Match Schedule`. Choose a page
-that has a Match Schedule table and contains future matches.
+with a Match Schedule table. The sensor will show a time when the schedule lists
+an upcoming match.
 
-The integration uses Liquipedia's supported MediaWiki API and polls no more
-than once every five minutes. If no future match is available, the sensor has
-no state until one appears.
+The integration refreshes data every five minutes using Liquipedia's MediaWiki
+API. With no future match in the source, the timestamp sensor has no value.
 
-## Supported Games
+## Supported Games for Tournament Tracking
 
 - League of Legends
 - Counter-Strike
@@ -76,12 +90,13 @@ no state until one appears.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. See the [maintainer guide](docs/maintainers.md) for
+the code map and local validation commands.
 
 ### CI and releases
 
-Every pull request targeting `main` runs hassfest and HACS validation. Apply
-exactly one version label before merging it:
+Every pull request targeting `main` runs Ruff, pytest, hassfest, and HACS validation.
+Apply exactly one version label before merging it:
 
 | Label | Use when the change is… |
 |-------|--------------------------|
@@ -89,10 +104,12 @@ exactly one version label before merging it:
 | `bump:minor` | backwards-compatible new functionality |
 | `bump:major` | a breaking change |
 
-When validation succeeds, the pull request gets a GitHub release candidate
-tagged as `v{new-version}-rc.{pr-number}`. Once it is merged, the stable
-release workflow validates `main`, updates `manifest.json`, creates the stable
-tag, and publishes the GitHub release.
+When validation succeeds for a labeled pull request from this repository, CI
+can publish a GitHub release candidate tagged as
+`v{new-version}-rc.{workflow-run-number}`. Each new workflow run
+gets a version that Home Assistant can recognize as a separate update.
+Once the pull request is merged, the stable release workflow validates the merge
+commit, tags it with the updated manifest, and publishes the GitHub release.
 
 This follows [Semantic Versioning](https://semver.org/). Use Conventional
 Commits (`fix:`, `feat:`, and `feat!:` or a `BREAKING CHANGE:` footer) in the
@@ -109,4 +126,6 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Disclaimer
 
-This integration is not officially affiliated with Liquipedia or Team Liquid. It uses publicly available data from Liquipedia's APIs and pages.
+Match data comes from [Liquipedia](https://liquipedia.net/) and is available
+under [CC BY-SA 3.0](https://creativecommons.org/licenses/by-sa/3.0/). The
+integration is independent of Liquipedia and Team Liquid.

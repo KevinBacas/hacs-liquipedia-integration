@@ -1,7 +1,20 @@
-"""Test configuration for the custom integration."""
+"""Fixtures for exercising Liquipedia API calls offline."""
 
-import sys
-from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
+
+import aiohttp
+import pytest
 
 
-sys.path.insert(0, str(Path(__file__).parents[1]))
+@pytest.fixture
+def mock_liquipedia_session():
+    """Build an aiohttp session whose response comes from a test."""
+
+    def make_session(read_json: AsyncMock) -> MagicMock:
+        session = MagicMock(spec=aiohttp.ClientSession)
+        response = MagicMock(spec=aiohttp.ClientResponse, status=200, json=read_json)
+        session.get.return_value.__aenter__ = AsyncMock(return_value=response)
+        session.get.return_value.__aexit__ = AsyncMock(return_value=False)
+        return session
+
+    return make_session

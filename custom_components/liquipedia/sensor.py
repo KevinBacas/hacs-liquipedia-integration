@@ -1,109 +1,58 @@
 """Support for Liquipedia sensors."""
 from __future__ import annotations
 
-import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any
 
-import aiohttp
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.aiohttp_client import async_create_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import (
-    CoordinatorEntity,
-    DataUpdateCoordinator,
-    UpdateFailed,
-)
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
-from .api import LiquipediaAPI
-from .const import (
-    CONF_GAME,
-    CONF_TOURNAMENT,
-    DOMAIN,
-    DEFAULT_UPDATE_INTERVAL,
-    USER_AGENT,
-)
+from . import LiquipediaConfigEntry
+from .const import DOMAIN
+from .coordinator import LiquipediaDataUpdateCoordinator
 
-_LOGGER = logging.getLogger(__name__)
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LiquipediaConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Liquipedia sensor platform."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     # The integration already performed the coordinator's first refresh.
     # Updating again here can wait for the API rate limit and exceed the
     # entity platform's startup timeout.
-    async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)])
+    async_add_entities(
+        [LiquipediaUpcomingMatchSensor(config_entry.runtime_data, config_entry)]
+    )
 
 
-class LiquipediaDataUpdateCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
-    """Class to manage fetching data from Liquipedia."""
-
-    def __init__(self, hass: HomeAssistant, config_entry: ConfigEntry) -> None:
-        """Initialize the coordinator."""
-        self.game = config_entry.data[CONF_GAME]
-        self.tournament = config_entry.data[CONF_TOURNAMENT]
-        self.api = LiquipediaAPI(
-            self.game,
-            async_create_clientsession(
-                hass,
-                headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip"},
-            ),
-        )
-
-        super().__init__(
-            hass,
-            _LOGGER,
-            name=f"Liquipedia {self.game}",
-            update_interval=timedelta(seconds=DEFAULT_UPDATE_INTERVAL),
-        )
-
-    async def _async_update_data(self) -> list[dict[str, Any]]:
-        """Fetch data from Liquipedia."""
-        try:
-            return await self.api.get_matches(self.tournament)
-        except (aiohttp.ClientError, ValueError) as exception:
-            raise UpdateFailed(f"Error communicating with API: {exception}") from exception
-
-
-class LiquipediaSensor(CoordinatorEntity, SensorEntity):
-    """Base class for Liquipedia sensors."""
-
-    def __init__(self, coordinator: LiquipediaDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
-        """Initialize the sensor."""
-        super().__init__(coordinator)
-        self._config_entry = config_entry
-        self._game = config_entry.data[CONF_GAME]
-        self._tournament = config_entry.data.get(CONF_TOURNAMENT, "")
-
-    @property
-    def device_info(self) -> DeviceInfo:
-        """Return device information about this entity."""
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._config_entry.entry_id)},
-            name=f"Liquipedia {self._game.title()}",
-            manufacturer="Liquipedia",
-            model=self._game.title(),
-        )
-
-
-class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
+class LiquipediaUpcomingMatchSensor(
+    CoordinatorEntity[LiquipediaDataUpdateCoordinator], SensorEntity
+):
     """Sensor showing the next upcoming match."""
 
-    def __init__(self, coordinator: LiquipediaDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        coordinator: LiquipediaDataUpdateCoordinator,
+        config_entry: LiquipediaConfigEntry,
+    ) -> None:
         """Initialize the sensor."""
-        super().__init__(coordinator, config_entry)
-        self._attr_name = f"{self._game.title()} Upcoming Match"
+        super().__init__(coordinator)
+        self._attr_name = f"{coordinator.label} Upcoming Match"
         self._attr_unique_id = f"{config_entry.entry_id}_upcoming_match"
         self._attr_device_class = SensorDeviceClass.TIMESTAMP
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, config_entry.entry_id)},
+            name=f"Liquipedia {coordinator.label}",
+            manufacturer="Liquipedia",
+            model=coordinator.label,
+        )
 
     @property
     def native_value(self) -> datetime | None:
@@ -117,22 +66,31 @@ class LiquipediaUpcomingMatchSensor(LiquipediaSensor):
     def extra_state_attributes(self) -> dict[str, Any] | None:
         """Return the state attributes."""
         match = self._upcoming_match
+        attributes = self.coordinator.match_attributes(match)
         if match is None:
-            return None
-        return {
-            "title": match["title"],
-            "team1": match["team1"],
-            "team2": match["team2"],
-            "tournament": match.get("tournament") or self._tournament,
-            "best_of": match.get("best_of"),
-            "last_updated": dt_util.utcnow().isoformat(),
-        }
+            return attributes or None
+        attributes.update(
+            title=match["title"],
+            team1=match["team1"],
+            team2=match["team2"],
+            tournament=match.get("tournament") or self.coordinator.tournament,
+            best_of=match.get("best_of"),
+            last_updated=self.coordinator.data.updated_at.isoformat(),
+        )
+        return attributes
 
     @property
     def _upcoming_match(self) -> dict[str, Any] | None:
         """Return the next match that has not started."""
+        if self.coordinator.data is None:
+            return None
         now = dt_util.utcnow()
         return next(
-            (match for match in self.coordinator.data if match["date"] >= now),
+            (
+                match
+                for match in self.coordinator.data.matches
+                if match["date"] >= now
+                and match.get("status") not in {"live", "finished"}
+            ),
             None,
         )
