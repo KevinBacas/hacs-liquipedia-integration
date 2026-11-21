@@ -34,7 +34,6 @@
         "title": "Choisir le jeu du tournoi",
         "description": "Choisissez un jeu pour charger ses tournois en cours et ceux qui débutent dans les 30 prochains jours.",
         "data": {
-          "name": "Nom",
           "game": "Jeu",
           "team_filter": "Équipe à suivre (facultatif)"
         },
@@ -66,8 +65,9 @@
       "cannot_connect_team": "Impossible de vérifier la page d’équipe sur Liquipedia. Réessayez.",
       "invalid_game": "Sélectionnez un jeu pris en charge.",
       "invalid_tournament": "Sélectionnez un tournoi dans la liste.",
-      "invalid_schedule": "Saisissez le titre d’une page Match Schedule.",
-      "cannot_connect": "Impossible de charger les données Liquipedia. Réessayez ou choisissez la saisie manuelle.",
+      "invalid_schedule": "Saisissez le titre d’une page Match Schedule compatible sur Liquipedia.",
+      "cannot_connect": "Impossible de charger les données Liquipedia. Réessayez.",
+      "unknown": "Une erreur inattendue s’est produite. Réessayez.",
       "no_tournaments": "Aucun tournoi trouvé sur cette période. Vous pouvez entrer un calendrier manuellement.",
       "no_schedule": "Aucun calendrier de matchs compatible trouvé. Choisissez un autre tournoi ou saisissez son calendrier manuellement."
     },
@@ -104,7 +104,8 @@
       "invalid_team_games": "Sélectionnez au moins un jeu pris en charge.",
       "invalid_team_page": "Choisissez une équipe proposée ou saisissez un titre de page d’équipe Liquipedia valide.",
       "cannot_search_team": "La recherche dans Liquipedia a échoué. Vous pouvez saisir le titre d’une page d’équipe.",
-      "cannot_connect_team": "Impossible de vérifier la page d’équipe sur Liquipedia. Réessayez."
+      "cannot_connect_team": "Impossible de vérifier la page d’équipe sur Liquipedia. Réessayez.",
+      "unknown": "Une erreur inattendue s’est produite. Réessayez."
     }
   },
   "selector": {

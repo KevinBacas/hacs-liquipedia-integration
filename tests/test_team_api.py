@@ -7,6 +7,7 @@ import pytest
 
 from custom_components.liquipedia.api import LiquipediaAPI, TeamNotFoundError
 
+
 def _team_html(content: str = "", extra: str = "") -> str:
     return f"""
       <div class="fo-nttax-infobox-container" data-analytics-infobox-type="Team">
@@ -75,17 +76,20 @@ def _match_card(timestamp: str, stream_cta: str = "Watch here", attributes: str 
     """
 
 
-def _team_api(html: str) -> LiquipediaAPI:
-    api = LiquipediaAPI("leagueoflegends")
-    api._async_parse = AsyncMock(return_value={
-        "parse": {"title": "WLGaming Esports", "text": {"*": html}},
-    })
-    return api
+@pytest.fixture
+def team_api(mock_liquipedia_session):
+    def make_client(html: str) -> LiquipediaAPI:
+        session = mock_liquipedia_session(AsyncMock(return_value={
+            "parse": {"title": "WLGaming Esports", "text": {"*": html}},
+        }))
+        return LiquipediaAPI("leagueoflegends", session)
+
+    return make_client
 
 
 @pytest.mark.asyncio
-async def test_team_cards_use_source_timezone_status_and_competition() -> None:
-    api = _team_api(
+async def test_team_cards_use_source_timezone_status_and_competition(team_api) -> None:
+    api = team_api(
         _team_html(_team_ticker(_match_card("1795352400") + _match_card("1795266000", "Watch now")))
     )
 
@@ -111,31 +115,69 @@ async def test_team_cards_use_source_timezone_status_and_competition() -> None:
     ('data-match-status="ongoing"', "live"),
     ('data-match-status="cancelled"', "finished"),
     ('data-match-status="livestream"', "unknown"),
+    ('data-match-status="not-live"', "unknown"),
 ])
-async def test_team_status_requires_an_explicit_state(markup: str, expected_status: str) -> None:
-    api = _team_api(_team_html(_team_ticker(_match_card("1795352400", attributes=markup))))
+async def test_team_status_requires_an_explicit_state(
+    markup: str, expected_status: str, team_api,
+) -> None:
+    api = team_api(_team_html(_team_ticker(_match_card("1795352400", attributes=markup))))
 
     assert (await api.get_team_matches("WLGaming Esports"))[0]["status"] == expected_status
 
 
 @pytest.mark.asyncio
-async def test_team_without_ticker_is_a_valid_empty_schedule() -> None:
-    api = _team_api(_team_html(extra='<h2 id="Player_Roster">Player Roster</h2>'))
+async def test_team_without_ticker_is_a_valid_empty_schedule(team_api) -> None:
+    api = team_api(_team_html(extra='<h2 id="Player_Roster">Player Roster</h2>'))
 
     assert await api.get_team_matches("WLGaming Esports") == []
 
 
 @pytest.mark.asyncio
-async def test_unrelated_tickers_cannot_supply_team_matches() -> None:
-    unrelated_card = _match_card("1795266000", "Watch now").replace(
-        'class="mw-selflink selflink"', 'title="Another team"'
+async def test_truncated_team_infobox_is_unavailable(team_api) -> None:
+    api = team_api(
+        '<div data-analytics-infobox-type="Team"><div class="fo-nttax-infobox-topcontent">'
     )
-    unrelated_ticker = f'<div class="match-ticker-carousel">{unrelated_card}</div>'
-    api = _team_api(_team_html(extra=unrelated_ticker))
-    assert await api.get_team_matches("WLGaming Esports") == []
 
-    api = _team_api(_team_html(_team_ticker(_match_card("1795352400")), extra=unrelated_ticker))
+    with pytest.raises(ValueError, match="supported team page"):
+        await api.get_team_matches("WLGaming Esports")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_team_ticker", [False, True])
+async def test_unrelated_tickers_cannot_supply_team_matches(with_team_ticker, team_api) -> None:
+    unrelated_ticker = _team_ticker(_match_card("1795266000", "Watch now"))
+    team_ticker = _team_ticker(_match_card("1795352400")) if with_team_ticker else ""
+    api = team_api(_team_html(team_ticker, extra=unrelated_ticker))
+
+    assert [match["status"] for match in await api.get_team_matches("WLGaming Esports")] == (
+        ["unknown"] if with_team_ticker else []
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_ticker_does_not_attribute_unrelated_cards_to_selected_team(team_api) -> None:
+    unrelated_card = (
+        _match_card("1795266000", "Watch now")
+        .replace("WLGaming Esports", "Another Team")
+        .replace('class="mw-selflink selflink"', 'title="Another Team"')
+    )
+    api = team_api(_team_html(_team_ticker(_match_card("1795352400") + unrelated_card)))
+
     assert [match["status"] for match in await api.get_team_matches("WLGaming Esports")] == ["unknown"]
+
+
+@pytest.mark.asyncio
+async def test_team_card_accepts_canonical_name_linked_to_a_team_alias(team_api) -> None:
+    card = (
+        _match_card("1795352400")
+        .replace('title="WLGaming Esports"', 'title="We Love Gaming"')
+        .replace('class="mw-selflink selflink"', 'title="We Love Gaming"')
+    )
+    api = team_api(_team_html(_team_ticker(card)))
+
+    (match,) = await api.get_team_matches("We Love Gaming")
+
+    assert match["opponent"] == "Zena Esports"
 
 
 @pytest.mark.asyncio
@@ -147,9 +189,9 @@ async def test_unrelated_tickers_cannot_supply_team_matches() -> None:
     _team_html(_team_ticker(_match_card("unparseable"))),
     _team_html('<strong class="error">Lua error</strong>'),
 ])
-async def test_missing_team_or_broken_ticker_raises_source_error(html: str) -> None:
+async def test_missing_team_or_broken_ticker_raises_source_error(html: str, team_api) -> None:
     with pytest.raises(ValueError):
-        await _team_api(html).get_team_matches("WLGaming Esports")
+        await team_api(html).get_team_matches("WLGaming Esports")
 
 
 def _team_page(title: str, index: int = 1) -> dict:
@@ -162,16 +204,16 @@ def _team_page(title: str, index: int = 1) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_search_returns_ranked_canonical_team_pages_only() -> None:
-    api = LiquipediaAPI("leagueoflegends")
-    request = api._async_request = AsyncMock(return_value={"query": {"pages": [
+async def test_search_returns_ranked_canonical_team_pages_only(mock_liquipedia_session) -> None:
+    session = mock_liquipedia_session(AsyncMock(return_value={"query": {"pages": [
         _team_page("Karmine Corp Blue", index=2),
         {"ns": 0, "index": 3, "title": "Karmine Corp/KCX5"},
         _team_page("Karmine Corp", index=1),
-    ]}})
+    ]}}))
+    api = LiquipediaAPI("leagueoflegends", session)
 
     assert await api.search_teams(" Karmine ") == ["Karmine Corp", "Karmine Corp Blue"]
-    params = request.call_args.args[0]
+    params = session.get.call_args.kwargs["params"]
     assert params["action"] == "query"
     assert params["generator"] == "prefixsearch"
     assert params["gpssearch"] == "Karmine"
@@ -180,15 +222,15 @@ async def test_search_returns_ranked_canonical_team_pages_only() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_returns_canonical_title_after_redirect() -> None:
-    api = LiquipediaAPI("leagueoflegends")
-    request = api._async_request = AsyncMock(return_value={"query": {
+async def test_resolve_team_returns_canonical_title_after_redirect(mock_liquipedia_session) -> None:
+    session = mock_liquipedia_session(AsyncMock(return_value={"query": {
         "pages": [_team_page("T1")],
         "redirects": [{"from": "SK Telecom T1", "to": "T1"}],
-    }})
+    }}))
+    api = LiquipediaAPI("leagueoflegends", session)
 
     assert await api.resolve_team("SK_Telecom_T1") == "T1"
-    assert request.call_args.args[0]["titles"] == "SK Telecom T1"
+    assert session.get.call_args.kwargs["params"]["titles"] == "SK Telecom T1"
 
 
 @pytest.mark.asyncio
@@ -197,19 +239,24 @@ async def test_resolve_team_returns_canonical_title_after_redirect() -> None:
     {"ns": 0, "title": "Cup 2026"},
     {"ns": 10, "title": "Template:Team"},
 ])
-async def test_resolve_team_rejects_missing_and_non_team_pages(page: dict) -> None:
-    api = LiquipediaAPI("counterstrike")
-    api._async_request = AsyncMock(return_value={"query": {"pages": [page]}})
+async def test_resolve_team_rejects_missing_and_non_team_pages(page: dict, mock_liquipedia_session) -> None:
+    session = mock_liquipedia_session(AsyncMock(return_value={"query": {"pages": [page]}}))
+    api = LiquipediaAPI("counterstrike", session)
 
     with pytest.raises(TeamNotFoundError):
         await api.resolve_team(page["title"])
 
 
 @pytest.mark.asyncio
-async def test_search_returns_empty_only_for_a_well_formed_empty_response() -> None:
-    api = LiquipediaAPI("leagueoflegends")
-    api._async_request = AsyncMock(side_effect=[{"batchcomplete": True}, {}])
+async def test_search_returns_empty_for_a_well_formed_empty_response(mock_liquipedia_session) -> None:
+    session = mock_liquipedia_session(AsyncMock(return_value={"batchcomplete": True}))
 
-    assert await api.search_teams("Unknown team") == []
+    assert await LiquipediaAPI("leagueoflegends", session).search_teams("Unknown team") == []
+
+
+@pytest.mark.asyncio
+async def test_search_rejects_a_malformed_response(mock_liquipedia_session) -> None:
+    session = mock_liquipedia_session(AsyncMock(return_value={}))
+
     with pytest.raises(ValueError, match="unexpected team lookup response"):
-        await api.search_teams("T1")
+        await LiquipediaAPI("leagueoflegends", session).search_teams("T1")

@@ -5,28 +5,31 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import dt as dt_util
 
+from . import LiquipediaConfigEntry
 from .const import DOMAIN
 from .coordinator import LiquipediaDataUpdateCoordinator
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LiquipediaConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Liquipedia sensor platform."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     # The integration already performed the coordinator's first refresh.
     # Updating again here can wait for the API rate limit and exceed the
     # entity platform's startup timeout.
-    async_add_entities([LiquipediaUpcomingMatchSensor(coordinator, config_entry)])
+    async_add_entities(
+        [LiquipediaUpcomingMatchSensor(config_entry.runtime_data, config_entry)]
+    )
 
 
 class LiquipediaUpcomingMatchSensor(
@@ -34,7 +37,11 @@ class LiquipediaUpcomingMatchSensor(
 ):
     """Sensor showing the next upcoming match."""
 
-    def __init__(self, coordinator: LiquipediaDataUpdateCoordinator, config_entry: ConfigEntry) -> None:
+    def __init__(
+        self,
+        coordinator: LiquipediaDataUpdateCoordinator,
+        config_entry: LiquipediaConfigEntry,
+    ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self._attr_name = f"{coordinator.label} Upcoming Match"
@@ -83,10 +90,7 @@ class LiquipediaUpcomingMatchSensor(
                 match
                 for match in self.coordinator.data.matches
                 if match["date"] >= now
-                and (
-                    not self.coordinator.team_mode
-                    or match.get("status") not in {"live", "finished"}
-                )
+                and match.get("status") not in {"live", "finished"}
             ),
             None,
         )

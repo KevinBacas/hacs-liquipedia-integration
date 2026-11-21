@@ -7,25 +7,26 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
+from . import LiquipediaConfigEntry
 from .const import DOMAIN
 from .coordinator import LiquipediaDataUpdateCoordinator
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
     hass: HomeAssistant,
-    config_entry: ConfigEntry,
+    config_entry: LiquipediaConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the Liquipedia binary sensor platform."""
-    coordinator = hass.data[DOMAIN][config_entry.entry_id]["coordinator"]
     async_add_entities(
-        [LiquipediaMatchRunningBinarySensor(coordinator, config_entry)],
+        [LiquipediaMatchRunningBinarySensor(config_entry.runtime_data, config_entry)],
     )
 
 
@@ -37,7 +38,7 @@ class LiquipediaMatchRunningBinarySensor(
     def __init__(
         self,
         coordinator: LiquipediaDataUpdateCoordinator,
-        config_entry: ConfigEntry,
+        config_entry: LiquipediaConfigEntry,
     ) -> None:
         """Initialize the binary sensor."""
         super().__init__(coordinator)

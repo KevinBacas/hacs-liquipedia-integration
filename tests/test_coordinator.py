@@ -6,7 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
 
-from custom_components.liquipedia.binary_sensor import LiquipediaMatchRunningBinarySensor
+from custom_components.liquipedia.binary_sensor import (
+    LiquipediaMatchRunningBinarySensor,
+)
 from custom_components.liquipedia.coordinator import LiquipediaDataUpdateCoordinator
 from custom_components.liquipedia.sensor import LiquipediaUpcomingMatchSensor
 
@@ -122,6 +124,7 @@ async def test_finished_duplicate_overrides_live_match():
 async def test_existing_tournament_keeps_entities_and_optional_filter_applies_to_both(options, expected):
     client = _client(matches=[
         _match(SOONER, status="live", side1="Random Team"),
+        _match(SOONER, status="finished"),
         _match(LATER, side1="Opponent", side2="Team Liquid"),
     ])
     coordinator, entry = _make_coordinator(
@@ -135,7 +138,7 @@ async def test_existing_tournament_keeps_entities_and_optional_filter_applies_to
     client.get_team_matches.assert_not_awaited()
     assert upcoming.unique_id == "stable-id_upcoming_match"
     assert live.unique_id == "stable-id_match_running"
-    assert upcoming.native_value == (SOONER if expected else LATER)
+    assert upcoming.native_value == LATER
     assert live.is_on is expected
 
 

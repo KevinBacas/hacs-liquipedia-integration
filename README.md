@@ -71,7 +71,8 @@ For manual entry, enter the title of the tournament's Match Schedule page, exact
 after the game name in its Liquipedia URL. For example, this URL:
 `https://liquipedia.net/leagueoflegends/First_Stand_Tournament/2026/Match_Schedule`
 uses the page title `First Stand Tournament/2026/Match Schedule`. Choose a page
-that has a Match Schedule table and contains future matches.
+with a Match Schedule table. The sensor will show a time when the schedule lists
+an upcoming match.
 
 The integration refreshes data every five minutes using Liquipedia's MediaWiki
 API. With no future match in the source, the timestamp sensor has no value.
@@ -89,11 +90,12 @@ API. With no future match in the source, the timestamp sensor has no value.
 
 ## Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Contributions are welcome. See the [maintainer guide](docs/maintainers.md) for
+the code map and local validation commands.
 
 ### CI and releases
 
-Every pull request targeting `main` runs pytest, hassfest, and HACS validation.
+Every pull request targeting `main` runs Ruff, pytest, hassfest, and HACS validation.
 Apply exactly one version label before merging it:
 
 | Label | Use when the change is… |
@@ -102,12 +104,12 @@ Apply exactly one version label before merging it:
 | `bump:minor` | backwards-compatible new functionality |
 | `bump:major` | a breaking change |
 
-When validation succeeds, the pull request gets a GitHub release candidate
-tagged as `v{new-version}-rc.{workflow-run-number}`. Each new workflow run
+When validation succeeds for a labeled pull request from this repository, CI
+can publish a GitHub release candidate tagged as
+`v{new-version}-rc.{workflow-run-number}`. Each new workflow run
 gets a version that Home Assistant can recognize as a separate update.
-Once the pull request is merged, the stable
-release workflow validates `main`, updates `manifest.json`, creates the stable
-tag, and publishes the GitHub release.
+Once the pull request is merged, the stable release workflow validates the merge
+commit, tags it with the updated manifest, and publishes the GitHub release.
 
 This follows [Semantic Versioning](https://semver.org/). Use Conventional
 Commits (`fix:`, `feat:`, and `feat!:` or a `BREAKING CHANGE:` footer) in the

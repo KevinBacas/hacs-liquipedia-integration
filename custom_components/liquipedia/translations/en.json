@@ -34,7 +34,6 @@
         "title": "Choose the tournament game",
         "description": "Choose a game to load its ongoing tournaments and those starting in the next 30 days.",
         "data": {
-          "name": "Name",
           "game": "Game",
           "team_filter": "Team to follow (optional)"
         },
@@ -66,8 +65,9 @@
       "cannot_connect_team": "Unable to check the Liquipedia team page. Try again.",
       "invalid_game": "Select a supported game.",
       "invalid_tournament": "Select a tournament from the list.",
-      "invalid_schedule": "Enter a Match Schedule page title.",
-      "cannot_connect": "Unable to load Liquipedia data. Try again or choose manual entry.",
+      "invalid_schedule": "Enter the title of a supported Liquipedia Match Schedule page.",
+      "cannot_connect": "Unable to load Liquipedia data. Try again.",
+      "unknown": "An unexpected error occurred. Try again.",
       "no_tournaments": "No tournaments were found in this period. You can enter a schedule manually.",
       "no_schedule": "No supported match schedule was found. Choose another tournament or enter its schedule manually."
     },
@@ -104,7 +104,8 @@
       "invalid_team_games": "Select at least one supported game.",
       "invalid_team_page": "Choose a suggested team or enter a valid Liquipedia team page title.",
       "cannot_search_team": "Unable to search Liquipedia. You can enter a team page title manually.",
-      "cannot_connect_team": "Unable to check the Liquipedia team page. Try again."
+      "cannot_connect_team": "Unable to check the Liquipedia team page. Try again.",
+      "unknown": "An unexpected error occurred. Try again."
     }
   },
   "selector": {

@@ -4,10 +4,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import pytest
-
 from homeassistant import config_entries
 
-from custom_components.liquipedia.api import TeamNotFoundError
+from custom_components.liquipedia.api import ScheduleNotFoundError, TeamNotFoundError
 from custom_components.liquipedia.config_flow import ConfigFlow
 
 
@@ -44,15 +43,13 @@ async def test_game_then_tournament_stores_resolved_schedule():
     with patch("custom_components.liquipedia.config_flow.async_get_clientsession"), patch(
         "custom_components.liquipedia.config_flow.LiquipediaAPI", return_value=api
     ) as client:
-        result = await flow.async_step_tournament_game(
-            {"name": "My cup", "game": "valorant"}
-        )
+        result = await flow.async_step_tournament_game({"game": "valorant"})
     assert result["step_id"] == "tournament"
     assert client.call_args.args[0] == "valorant"
     result = await flow.async_step_tournament({"tournament": "Cup/2026"})
+    assert result["title"] == "Cup/2026"
     assert result["data"] == {
         "mode": "tournament",
-        "name": "My cup",
         "game": "valorant",
         "tournament": "Cup/2026/Match Schedule",
     }
@@ -66,18 +63,20 @@ async def test_empty_or_failed_discovery_keeps_manual_setup(failure):
     flow = _flow()
     api = MagicMock()
     api.get_tournaments = AsyncMock(return_value={}, side_effect=failure)
+    api.get_schedule_page = AsyncMock(return_value="Cup/Match Schedule")
     with patch("custom_components.liquipedia.config_flow.async_get_clientsession"), patch(
         "custom_components.liquipedia.config_flow.LiquipediaAPI", return_value=api
     ):
         result = await flow.async_step_tournament_game(
-            {"name": "Cup", "game": "dota2", "team_filter": " Team Liquid "}
+            {"game": "dota2", "team_filter": " Team Liquid "}
         )
     assert result["errors"]["base"] == ("cannot_connect" if failure else "no_tournaments")
     result = await flow.async_step_tournament({"tournament": "manual-entry"})
     assert result["step_id"] == "manual"
     result = await flow.async_step_manual({"tournament": "  "})
     assert result["errors"] == {"tournament": "invalid_schedule"}
-    result = await flow.async_step_manual({"tournament": " Cup/Match Schedule "})
+    result = await flow.async_step_manual({"tournament": " Cup/Match_Schedule "})
+    api.get_schedule_page.assert_awaited_once_with("Cup/Match_Schedule")
     assert result["data"]["tournament"] == "Cup/Match Schedule"
     assert result["data"]["team_filter"] == "Team Liquid"
 
@@ -87,12 +86,41 @@ async def test_invalid_selection_and_missing_schedule_do_not_create_entry():
     flow = _flow()
     flow._tournaments = {"Cup": "Cup"}
     flow._api = MagicMock()
-    flow._api.get_schedule_page = AsyncMock(side_effect=ValueError())
+    flow._api.get_schedule_page = AsyncMock(side_effect=ScheduleNotFoundError())
     result = await flow.async_step_tournament({"tournament": "Other cup"})
     assert result["errors"] == {"tournament": "invalid_tournament"}
     flow._api.get_schedule_page.assert_not_called()
     result = await flow.async_step_tournament({"tournament": "Cup"})
     assert result["errors"] == {"base": "no_schedule"}
+    flow.async_set_unique_id.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "errors"),
+    [
+        (ScheduleNotFoundError(), {"tournament": "invalid_schedule"}),
+        (aiohttp.ClientError(), {"base": "cannot_connect"}),
+        (ValueError(), {"base": "cannot_connect"}),
+    ],
+)
+async def test_manual_schedule_errors_keep_the_entered_title(failure, errors):
+    flow = _flow()
+    api = SimpleNamespace(
+        get_tournaments=AsyncMock(return_value={}),
+        get_schedule_page=AsyncMock(side_effect=failure),
+    )
+    with patch.object(flow, "_api_for_game", return_value=api):
+        await flow.async_step_tournament_game({"game": "valorant"})
+    await flow.async_step_tournament({"tournament": "manual-entry"})
+
+    result = await flow.async_step_manual({"tournament": "Example Cup"})
+
+    assert result["step_id"] == "manual"
+    assert result["errors"] == errors
+    assert _field(result["data_schema"], "tournament").description == {
+        "suggested_value": "Example Cup"
+    }
     flow.async_set_unique_id.assert_not_called()
 
 

@@ -1,9 +1,9 @@
 """Parse the upcoming match cards rendered on a Liquipedia team page."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from html.parser import HTMLParser
-import re
 from typing import Any
 
 BEST_OF_PATTERN = re.compile(r"\bBo\d+\b", re.IGNORECASE)
@@ -13,12 +13,34 @@ _VOID_ELEMENTS = {
 }
 _STATUS_ATTRIBUTES = ("data-status", "data-match-status", "data-state", "data-match-state")
 _LIVE_VALUES = {"live", "ongoing", "in-progress", "running"}
-_FINISHED_VALUES = {"finished", "completed", "cancelled", "canceled", "notplayed"}
+_FINISHED_VALUES = {"finished", "completed", "cancelled", "canceled", "notplayed", "not-played"}
 
 
 def normalize_title(value: str) -> str:
     """Normalize MediaWiki page-title whitespace."""
     return " ".join(value.replace("_", " ").split())
+
+
+def match_status_markers(attributes: dict[str, str | None]) -> set[str]:
+    """Extract explicit state fields and match-specific status classes."""
+    values = {value for name in _STATUS_ATTRIBUTES if (value := attributes.get(name))}
+    values.update(
+        css_class.removeprefix("match-status--")
+        for css_class in (attributes.get("class") or "").split()
+        if css_class.startswith("match-status--")
+    )
+    if attributes.get("data-finished") == "finished":
+        values.add("finished")
+    return {value.strip().lower().replace("_", "-") for value in values}
+
+
+def match_status(values: set[str]) -> str:
+    """Use explicit match state, prioritizing a terminal state."""
+    if values & _FINISHED_VALUES:
+        return "finished"
+    if values & _LIVE_VALUES:
+        return "live"
+    return "unknown"
 
 
 @dataclass
@@ -33,6 +55,14 @@ class _Participant:
             return page_title
         return self.name_link or self.logo_link or "".join(self.name_text).strip()
 
+    def identifies(self, page_title: str) -> bool:
+        """Match the team using its self link, title, logo, or visible name."""
+        return self.self_link or any(
+            normalize_title(value).casefold() == page_title.casefold()
+            for value in (self.name_link, self.logo_link, "".join(self.name_text))
+            if value
+        )
+
 
 @dataclass
 class _Card:
@@ -42,7 +72,6 @@ class _Card:
     tournament_name: list[str] = field(default_factory=list)
     tournament_page: str | None = None
     status_values: set[str] = field(default_factory=set)
-    watch_now: bool = False
 
     def match(self, page_title: str, game: str) -> dict[str, Any] | None:
         if self.timestamp is None or len(self.participants) != 2:
@@ -57,18 +86,12 @@ class _Card:
         if not (team1 and team2 and tournament):
             return None
 
-        selected_team = page_title.casefold()
+        first_is_team, second_is_team = (
+            participant.identifies(page_title) for participant in self.participants
+        )
         opponent = None
-        if normalize_title(team1).casefold() == selected_team:
-            opponent = team2
-        elif normalize_title(team2).casefold() == selected_team:
-            opponent = team1
-
-        status = "unknown"
-        if self.status_values & _FINISHED_VALUES:
-            status = "finished"
-        elif self.watch_now or self.status_values & _LIVE_VALUES:
-            status = "live"
+        if first_is_team != second_is_team:
+            opponent = team2 if first_is_team else team1
 
         best_of = BEST_OF_PATTERN.search(" ".join(self.header))
         return {
@@ -77,7 +100,7 @@ class _Card:
             "team1": team1,
             "team2": team2,
             "opponent": opponent,
-            "status": status,
+            "status": match_status(self.status_values),
             "tournament": tournament,
             "tournament_page": self.tournament_page,
             "game": game,
@@ -132,7 +155,6 @@ class TeamPageParser(HTMLParser):
             and "fo-nttax-infobox-topcontent" in classes
         ):
             self._team_topcontent_depth = len(self._elements) - 1
-            self.has_team_layout = True
         if (
             attributes.get("id") == "Upcoming_Matches"
             and self._team_topcontent_depth is not None
@@ -161,16 +183,9 @@ class TeamPageParser(HTMLParser):
         if "match-ticker-card__opponent" in classes:
             card.participants.append(_Participant())
         if self._inside("match-ticker-card__header") or "match-ticker-card" in classes:
-            for name in _STATUS_ATTRIBUTES:
-                if value := attributes.get(name):
-                    card.status_values.add(value.strip().lower().replace("_", "-"))
-            for css_class in classes:
-                if css_class.startswith("match-status--"):
-                    card.status_values.add(css_class.removeprefix("match-status--"))
+            card.status_values.update(match_status_markers(attributes))
         if self._inside("match-ticker-card__header") and "timer-object" in classes:
             card.timestamp = attributes.get("data-timestamp")
-            if attributes.get("data-finished") == "finished":
-                card.status_values.add("finished")
 
         if tag != "a":
             return
@@ -180,7 +195,7 @@ class TeamPageParser(HTMLParser):
             if self._inside("team-name-dynamic"):
                 if "new" not in classes:
                     participant.name_link = title or None
-                participant.self_link = "mw-selflink" in classes
+                participant.self_link = bool(classes & {"mw-selflink", "selflink"})
             elif self._inside("team-template-image-icon") and title:
                 participant.logo_link = title
         elif self._inside("match-ticker-card-tournament-name") and title and "new" not in classes:
@@ -195,7 +210,11 @@ class TeamPageParser(HTMLParser):
             card.participants[-1].name_text.append(data)
         if self._inside("match-ticker-card-tournament-name"):
             card.tournament_name.append(data)
-        if self._inside("match-info-links") and self._inside("match-button-cta-text"):
+        if (
+            self._inside("match-info-links")
+            and self._inside("livestream")
+            and self._inside("match-button-cta-text")
+        ):
             self._cta_text.append(data)
 
     def handle_endtag(self, tag: str) -> None:
@@ -211,6 +230,7 @@ class TeamPageParser(HTMLParser):
         if self._team_infobox_depth is not None and index <= self._team_infobox_depth:
             self._team_infobox_depth = None
         if self._team_topcontent_depth is not None and index <= self._team_topcontent_depth:
+            self.has_team_layout |= index == self._team_topcontent_depth
             self._team_topcontent_depth = None
         if self._ticker_depth is not None and index <= self._ticker_depth:
             self._ticker_depth = None
@@ -219,12 +239,12 @@ class TeamPageParser(HTMLParser):
         if any("match-button-cta-text" in classes for _, classes in closing):
             # The upstream stream widget emits this CTA only for an ongoing match.
             if " ".join("".join(self._cta_text).split()) == "Watch now":
-                card.watch_now = True
+                card.status_values.add("live")
             self._cta_text.clear()
         if any("match-ticker-card" in classes for _, classes in closing):
             if (match := card.match(self._page_title, self._game)) is None:
                 self.invalid_ticker = True
-            else:
+            elif match["opponent"] is not None:
                 self.matches.append(match)
             self._card = None
 

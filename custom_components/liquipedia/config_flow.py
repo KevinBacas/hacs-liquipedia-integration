@@ -1,20 +1,18 @@
 """Config flow for Liquipedia integration."""
 from __future__ import annotations
 
-import asyncio
+import logging
 from typing import Any
 
 import aiohttp
 import voluptuous as vol
-
 from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntry, ConfigFlowResult
-from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import LiquipediaAPI, TeamNotFoundError
+from .api import LiquipediaAPI, ScheduleNotFoundError, TeamNotFoundError
 from .const import (
     CONF_GAME,
     CONF_MODE,
@@ -29,12 +27,14 @@ from .const import (
     SUPPORTED_GAMES,
     TEAM_GAMES,
 )
+from .team_parser import normalize_title
 
+_LOGGER = logging.getLogger(__name__)
 _MANUAL = "manual-entry"
 _CONF_GAMES = "games"
 _CONF_TEAM_MATCH = "team_match"
 _CONF_TEAM_PAGE = "team_page"
-_API_ERRORS = (aiohttp.ClientError, asyncio.TimeoutError, ValueError)
+_API_ERRORS = (aiohttp.ClientError, TimeoutError, ValueError)
 _MODE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_MODE): selector.SelectSelector(
@@ -46,7 +46,6 @@ _MODE_SCHEMA = vol.Schema(
 )
 _TOURNAMENT_GAME_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_NAME, default="Liquipedia"): str,
         vol.Required(CONF_GAME, default=DEFAULT_GAME): vol.In(SUPPORTED_GAMES),
         vol.Optional(CONF_TEAM_FILTER): str,
     }
@@ -69,6 +68,12 @@ _TEAM_GAMES_SCHEMA = vol.Schema(
 _TEAM_FILTER_SCHEMA = vol.Schema({vol.Optional(CONF_TEAM_FILTER): str})
 
 
+def _schedule_key(page: str) -> str:
+    """Compare canonical titles with legacy MediaWiki title spellings."""
+    title = normalize_title(page)
+    return title[:1].upper() + title[1:]
+
+
 class _TeamFlow(config_entries.ConfigEntryBaseFlow):
     """Share game selection and team page confirmation between flows."""
 
@@ -78,7 +83,7 @@ class _TeamFlow(config_entries.ConfigEntryBaseFlow):
         self._team_pages: dict[str, str] = {}
         self._remaining_games: list[str] = []
         self._team_candidates: list[str] = []
-        self._team_search_failed = False
+        self._team_search_error: str | None = None
 
     def _api_for_game(self, game: str) -> LiquipediaAPI:
         """Use the shared Home Assistant HTTP session for a game wiki."""
@@ -111,7 +116,8 @@ class _TeamFlow(config_entries.ConfigEntryBaseFlow):
         if not self._remaining_games:
             return await self._async_save_team()
 
-        self._team_search_failed = False
+        self._team_search_error = None
+        self._team_candidates = []
         game = self._remaining_games[0]
         if page := self._existing_team_pages.get(game):
             self._team_candidates = [page]
@@ -121,8 +127,10 @@ class _TeamFlow(config_entries.ConfigEntryBaseFlow):
                     self._team_name
                 )
             except _API_ERRORS:
-                self._team_candidates = []
-                self._team_search_failed = True
+                self._team_search_error = "cannot_search_team"
+            except Exception:
+                _LOGGER.exception("Unexpected error searching for Liquipedia teams")
+                self._team_search_error = "unknown"
         return await self.async_step_team_page()
 
     async def async_step_team_page(
@@ -142,6 +150,9 @@ class _TeamFlow(config_entries.ConfigEntryBaseFlow):
                     errors[_CONF_TEAM_PAGE] = "invalid_team_page"
                 except _API_ERRORS:
                     errors["base"] = "cannot_connect_team"
+                except Exception:
+                    _LOGGER.exception("Unexpected error resolving a Liquipedia team page")
+                    errors["base"] = "unknown"
             elif team_match in self._team_candidates:
                 page = team_match
             else:
@@ -151,8 +162,8 @@ class _TeamFlow(config_entries.ConfigEntryBaseFlow):
                 self._team_pages[game] = page
                 self._remaining_games.pop(0)
                 return await self._async_next_team_game()
-        elif self._team_search_failed:
-            errors["base"] = "cannot_search_team"
+        elif self._team_search_error:
+            errors["base"] = self._team_search_error
 
         fields = {}
         if self._team_candidates:
@@ -249,7 +260,6 @@ class ConfigFlow(_TeamFlow, config_entries.ConfigFlow, domain=DOMAIN):
             else:
                 self._data = {
                     CONF_MODE: MODE_TOURNAMENT,
-                    CONF_NAME: user_input[CONF_NAME],
                     CONF_GAME: user_input[CONF_GAME],
                 }
                 if team_filter := user_input.get(CONF_TEAM_FILTER, "").strip():
@@ -261,6 +271,10 @@ class ConfigFlow(_TeamFlow, config_entries.ConfigFlow, domain=DOMAIN):
                 except _API_ERRORS:
                     self._tournaments = {}
                     self._discovery_error = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected error loading Liquipedia tournaments")
+                    self._tournaments = {}
+                    self._discovery_error = "unknown"
                 return await self.async_step_tournament()
         return self.async_show_form(
             step_id="tournament_game",
@@ -284,10 +298,13 @@ class ConfigFlow(_TeamFlow, config_entries.ConfigFlow, domain=DOMAIN):
                 assert self._api is not None
                 try:
                     page = await self._api.get_schedule_page(tournament)
-                except (aiohttp.ClientError, asyncio.TimeoutError):
-                    errors["base"] = "cannot_connect"
-                except ValueError:
+                except ScheduleNotFoundError:
                     errors["base"] = "no_schedule"
+                except _API_ERRORS:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected error resolving a Liquipedia schedule")
+                    errors["base"] = "unknown"
                 else:
                     return await self._async_create_tournament_entry(page)
         elif self._discovery_error:
@@ -328,17 +345,43 @@ class ConfigFlow(_TeamFlow, config_entries.ConfigFlow, domain=DOMAIN):
         """Allow schedules absent from the discovery list."""
         errors = {}
         if user_input is not None:
-            if page := user_input[CONF_TOURNAMENT].strip():
-                return await self._async_create_tournament_entry(page)
-            errors[CONF_TOURNAMENT] = "invalid_schedule"
-        return self.async_show_form(step_id="manual", data_schema=_MANUAL_SCHEMA, errors=errors)
+            if title := user_input[CONF_TOURNAMENT].strip():
+                assert self._api is not None
+                try:
+                    page = await self._api.get_schedule_page(title)
+                except ScheduleNotFoundError:
+                    errors[CONF_TOURNAMENT] = "invalid_schedule"
+                except _API_ERRORS:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected error resolving a Liquipedia schedule")
+                    errors["base"] = "unknown"
+                else:
+                    return await self._async_create_tournament_entry(page)
+            else:
+                errors[CONF_TOURNAMENT] = "invalid_schedule"
+        return self.async_show_form(
+            step_id="manual",
+            data_schema=self.add_suggested_values_to_schema(_MANUAL_SCHEMA, user_input),
+            errors=errors,
+        )
 
     async def _async_create_tournament_entry(self, page: str) -> ConfigFlowResult:
-        """Preserve the stored schedule title and existing duplicate detection."""
-        await self.async_set_unique_id(f"{self._data[CONF_GAME]}_{page}")
+        """Create a schedule entry if its page is not already configured."""
+        game = self._data[CONF_GAME]
+        key = _schedule_key(page)
+        await self.async_set_unique_id(f"{game}_{key}")
         self._abort_if_unique_id_configured()
+        for entry in self._async_current_entries():
+            if (
+                entry.data.get(CONF_GAME) == game
+                and (saved_page := entry.data.get(CONF_TOURNAMENT))
+                and _schedule_key(saved_page) == key
+            ):
+                return self.async_abort(reason="already_configured")
         return self.async_create_entry(
-            title=self._data[CONF_NAME], data={**self._data, CONF_TOURNAMENT: page}
+            title=page.removesuffix("/Match Schedule"),
+            data={**self._data, CONF_TOURNAMENT: page},
         )
 
     @staticmethod
